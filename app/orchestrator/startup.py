@@ -17,8 +17,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.artifact.backend import register as register_report_backend
 from app.execution import register as register_execution_backend
-from app.orchestrator.report_backend import register as register_report_backend
 from app.policy import Tool
 from app.rag.backend import rag_search_backend
 from app.rag.ingest import ingest_paths

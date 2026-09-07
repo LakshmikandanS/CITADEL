@@ -683,6 +683,13 @@ def test_revision_reject_then_regenerate_then_fail_on_second_rejection(db, task,
             "document_id": "DOC-P101-HIST",
             "page": 1,
             "text": _EVIDENCE_TEXT,
+            # step 8 integration fix: real evidence rows always carry
+            # `classification` (§3's own Evidence schema) -- the Verifier's
+            # fourth check (`app.artifact.verifier`) needs it on every row
+            # `revise_report`'s regenerated artifact cites, now that
+            # `app.orchestrator.agent_loop._commit_artifact` runs the real
+            # Verifier instead of just writing a TEMP row.
+            "classification": Classification.CONFIDENTIAL,
         }
     ]
     memory.computed = {"most_recent": "2026-06-14", "days_since": 85, "records_found": 2}

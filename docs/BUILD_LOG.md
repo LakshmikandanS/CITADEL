@@ -795,5 +795,155 @@ unchanged by that swap.
 | Multi-agent | Requires dropping `Agent.task_id`'s UNIQUE constraint deliberately (step 3 decision 7) before the agent loop can be extended |
 
 ---
-## Step 8 — `artifact-pipeline` — NOT STARTED
+
+## Step 8 — `artifact-pipeline` — COMPLETE
+
+**Status:** 116 passed, 10 skipped (up from 110 passed, 13 skipped — the
+three §9 Artifact stubs are now real tests, plus three more covering the
+approver-identity rule, one-transaction atomicity, and the reject → revise →
+second-reject → FAILED path through the real endpoint). Every test in this
+step runs against fake `rag.search`/`python.execute` backends (no Ollama, no
+Docker) and the REAL `generate_report` backend/Verifier/approval endpoint —
+the same discipline `orchestrator` (step 7) used for its own suite.
+
+**Demo:** `.venv/Scripts/python -m tests.demos.step8_artifact` — needs a live
+Ollama (`hermes3`) and a live Docker daemon, same as step 7's demo.
+**Not run to completion in this integration pass** — Docker Desktop's daemon
+was still down (`docker version` fails to reach
+`npipe:////./pipe/dockerDesktopLinuxEngine`, unchanged from step 7's own
+integration pass); Ollama *was* reachable (`localhost:11434` returned `200`).
+The demo correctly detects this and exits early with its own message, exactly
+like step 7's demo does — this is an environment issue carried over from
+step 7's own pass, not a step 8 defect. The full generate → verify → approve
+→ release path it would otherwise print is proven instead by
+`tests/test_artifact.py::test_generate_verify_approve_release_happy_path`,
+which ran for real (fake `rag.search`/`python.execute`, real
+`app.artifact.backend`, real Verifier, real approval endpoint) and passed;
+its assertions cover exactly what the demo prints (the five checks, the
+event order, the final RELEASED/COMPLETED state).
+
+### Delivered
+
+```
+app/artifact/template.py       the one template, maintenance_summary_v1 (BB-045, no selection logic)
+app/artifact/verifier.py       verify() -- the five §6.10 checks, copied close to the pseudocode (BB-043)
+app/artifact/pipeline.py       create_and_verify_artifact() -- generate -> verify -> request approval
+app/artifact/backend.py        the real generate_report Tool Gateway backend, replacing report_backend.py's seam
+app/approval/router.py         POST /approvals/{approval_id}/decision -- the one transactional endpoint (BB-047)
+tests/test_artifact.py         6 tests (3 checklist + 3 more)
+tests/demos/step8_artifact.py  the step-8 demo
+```
+
+One-line registration swap in `app/orchestrator/startup.py` (the seam step 7
+built for exactly this): `register_report_backend` now imports from
+`app.artifact.backend` instead of `app.orchestrator.report_backend`. Nothing
+else about the agent loop, the plan, or the Tool Gateway call changed.
+
+### The contract step 9 (`cli`) calls
+
+Nothing new. `POST /task`, `GET /tasks/{id}`, `GET /tasks/{id}/trace` are
+unchanged; the CLI's `/approve <approval_id>` maps directly onto
+`POST /approvals/{approval_id}/decision` with `{"decision": "APPROVED",
+"comment": "..."}` (or `"REJECTED"`), and reads `artifact_status`/
+`task_status` back from the response body step 8 defines above.
+
+### Decisions later steps must respect
+
+1. **`app.orchestrator.agent_loop._commit_artifact` now delegates to
+   `app.artifact.pipeline.create_and_verify_artifact` instead of only
+   writing a TEMP row.** This is the one place outside `app/artifact/` and
+   `app/approval/` this step touched beyond the startup.py one-liner, and it
+   was unavoidable: §6.10 requires the Verifier to run "synchronously right
+   after generation," and OBSERVATION for the `generate_report` step (inside
+   the agent loop) is the only place that is literally true. The change is
+   narrow and mechanical: `_apply_observation`/`_commit_artifact` now return
+   `Optional[str]` (a failure reason) instead of `None` unconditionally, and
+   `run_agent_loop`'s success branch checks it, turning a Verifier rejection
+   into the same `AgentStatus.FAILED` path any other step failure already
+   uses (§4 mapping table row 6) — no new termination state, no new branch
+   in `app.orchestrator.service.orchestrate`. `tests/test_orchestration.py`'s
+   own suite (all of it, including the revision test) still passes unchanged
+   against this edit except for one fixture fix (decision 5 below).
+
+2. **CANDIDATE is never independently committed.** The §4 mapping table
+   shows `RUNNING/CANDIDATE/NOT_REQUIRED` as its own row ("Verifier begins
+   checking"), but `app.db.state_machines`'s own Artifact comment is explicit
+   that there is no artifact failure state — "a failed verification leaves
+   the artifact at TEMP." Read literally, those two statements are only
+   reconcilable if CANDIDATE is a same-transaction stepping stone: on a
+   verification pass, `TEMP -> CANDIDATE -> VERIFIED` all land in one commit;
+   on a failure, the whole verification transaction rolls back and the row
+   already committed at TEMP (row 1, its own separate commit) is what
+   remains. `app/artifact/pipeline.py`'s own docstring records this reading
+   explicitly as a ruling, not an assumption.
+
+3. **The Verifier's fourth check reads evidence from Working Memory, not
+   from the `Artifact` row.** `Artifact.provenance` only ever stores
+   `evidence_id`s (§3); the `classification` each cited row needs for
+   `Classification.exceeds` lives only on the in-flight evidence dicts
+   `app.orchestrator.working_memory.WorkingMemory.evidence` carries at the
+   moment `generate_report` runs. `create_and_verify_artifact` is therefore
+   called with that evidence list explicitly, not re-derived from the DB.
+
+4. **`app/approval/__init__.py` deliberately does not re-export `router`.**
+   `from app.approval.router import router` inside `__init__.py` would
+   shadow the `app.approval.router` *submodule* attribute with the
+   `APIRouter` instance, breaking any later `import app.approval.router as
+   ...` (hit this directly while writing the atomicity test — see the fix
+   below). `app.orchestrator`, `app.policy`, and `app.identity`'s own
+   `__init__.py` files already avoid this by never re-exporting `router`;
+   `app.main` imports each router directly from its own submodule instead.
+   Followed the same convention rather than special-casing this package.
+
+5. **One `tests/test_orchestration.py` fixture needed one field added.**
+   `test_revision_reject_then_regenerate_then_fail_on_second_rejection`
+   seeds `WorkingMemory.evidence` by hand, without a `classification` key —
+   harmless before this step (nothing read it), but the real Verifier's
+   fourth check now runs against every artifact `_commit_artifact` produces,
+   including this revision. Added
+   `"classification": Classification.CONFIDENTIAL` to that one fixture dict
+   (real evidence rows always carry it, §3) rather than making the Verifier
+   treat a missing classification as a silent pass — the codebase's own
+   fail-closed house rule (`Classification.rank` already raises on an
+   unknown marking) argues against softening the check instead.
+
+6. **The approval decision endpoint is role-gated
+   (`require_role(Role.APPROVER)`)**, the same pattern §6.8's
+   admin-only `DISABLE TOOL` uses. The design doc names `approver` as one of
+   §3's three roles but does not spell out the gate explicitly for §6.10;
+   ruled it should exist rather than leaving `/approvals/.../decision` open
+   to any authenticated session, since "a human approver" (§0's own scenario
+   line) implies the role, and every other privileged endpoint in this
+   codebase is gated the same way.
+
+7. **`DecisionRequest` has no `approver_id` field at all** — not "has one
+   but ignores it": there is no code path from the request body to the
+   acting approver's identity, matching `SessionIdentity`'s own pattern for
+   `user_id`. A client-sent `approver_id`/`user_id` is silently dropped by
+   pydantic's default extra-fields-ignored behaviour, which is §6.4's
+   "ignored if present," not a validation error.
+
+### Fixes applied during this step's build
+
+- `app/approval/__init__.py` originally re-exported `router` (matching an
+  earlier draft's assumption, not this codebase's actual convention) —
+  fixed per decision 4 above once the atomicity test's
+  `import app.approval.router as approval_router_module` surfaced it.
+- FastAPI wraps `HTTPException(detail=...)` under a top-level `"detail"` key
+  in the response body; the immutability test initially asserted
+  `response.json()["error"]` and was corrected to
+  `response.json()["detail"]["error"]` to match every other router in this
+  codebase's error shape.
+
+### Phase-2 seams
+
+| Seam | Extend by |
+|---|---|
+| A second template | `app/artifact/template.py`'s `render` becomes a dispatch over `TEMPLATE_NAME`; BB-045 is a deliberate no-op for this slice, not a missing feature |
+| DOCX/PDF rendering | A second render function returning a different `path` extension; the Verifier's `has_required_sections` would need a per-format reader |
+| A true write-once artifact store | Replace the API-layer `if artifact.status == RELEASED: reject()` check with a storage-layer guarantee (e.g. an object store's object-lock); the API-layer check stays as defense in depth |
+| An LLM-as-judge verification pass | A sixth check appended to `run_verification`'s report, gated behind its own flag — BB-038 deliberately excludes it for this slice |
+
+---
+
 ## Step 9 — `cli` — NOT STARTED

@@ -72,58 +72,44 @@ class AgentLoopResult:
     memory: Optional[WorkingMemory] = None
 
 
-def _commit_artifact(task_id: str, result: dict[str, Any], memory: WorkingMemory) -> None:
-    """Create the Artifact row for a successful `generate_report` call.
+def _commit_artifact(task_id: str, result: dict[str, Any], memory: WorkingMemory) -> Optional[str]:
+    """Create the Artifact row for a successful `generate_report` call, then
+    run the Verifier on it synchronously -- design doc section 6.10: "called
+    synchronously right after generation". This is a thin delegator to
+    `app.artifact.pipeline.create_and_verify_artifact` (step 8's own module);
+    it exists here, in OBSERVATION, because "right after generation" means
+    right after this Tool Gateway call returns, and that is nowhere else in
+    the agent loop.
 
-    Import kept local to avoid a module-level cycle: `app.orchestrator.state`
-    and the DB layer are only needed by this one branch, and every other
-    THINK/ACTION/OBSERVATION step in the loop needs none of it.
+    Import kept local to avoid a module-level cycle: `app.artifact` is only
+    needed by this one branch, and every other THINK/ACTION/OBSERVATION step
+    in the loop needs none of it.
+
+    Returns `None` on a verified artifact (section 4 mapping table rows 1-3);
+    returns a failure reason string when the Verifier's five checks do not
+    all pass (row 6: "Verifier check fails -> task FAILED", BB-038 -- no
+    auto-revision loop for a verification failure, distinct from section
+    5.3's one bounded *approval-rejection* revision).
     """
-    from sqlalchemy import func, select
+    from app.artifact import create_and_verify_artifact
 
-    from app.db.engine import SessionLocal
-    from app.db.models import Artifact
-    from app.db.state_machines import ArtifactStatus
-
-    with SessionLocal() as session:
-        existing_count = session.execute(
-            select(func.count()).select_from(Artifact).where(Artifact.task_id == task_id)
-        ).scalar_one()
-        artifact = Artifact(
-            artifact_id=result["artifact_id"],
-            task_id=task_id,
-            version=existing_count + 1,
-            type="maintenance_summary_report",
-            status=ArtifactStatus.TEMP,
-            path=result.get("path"),
-            provenance=result.get("provenance", []),
-        )
-        session.add(artifact)
-        session.flush()
-        append_event(
-            task_id,
-            None,
-            EventType.ARTIFACT_CREATED,
-            {
-                "artifact_id": artifact.artifact_id,
-                "version": artifact.version,
-                "path": artifact.path,
-                "hash": result.get("hash"),
-                "provenance": artifact.provenance,
-                "revised": result.get("revised", False),
-            },
-            session=session,
-        )
-        session.commit()
-        memory.artifact_id = artifact.artifact_id
-        memory.artifact_path = artifact.path
+    outcome = create_and_verify_artifact(task_id=task_id, result=result, evidence=memory.evidence)
+    memory.artifact_id = outcome.artifact_id
+    memory.artifact_path = outcome.artifact_path
+    return outcome.failure_reason
 
 
 def _apply_observation(
     step: PlanStepModel, result: dict[str, Any], memory: WorkingMemory, task_id: str
-) -> None:
+) -> Optional[str]:
     """OBSERVATION's effect on Working Memory -- what the *next* step's
-    THINK reads (`test_observation_feeds_the_next_think`'s own contract)."""
+    THINK reads (`test_observation_feeds_the_next_think`'s own contract).
+
+    Returns `None` normally; returns a failure reason string only for
+    `generate_report`, when the Verifier rejects the artifact (section 4
+    mapping table row 6) -- the one OBSERVATION outcome that can turn an
+    otherwise-successful Tool Gateway call into a loop-level failure.
+    """
     if step.action == Tool.RAG_SEARCH:
         memory.evidence = list(result.get("results", []))
     elif step.action == Tool.PYTHON_EXECUTE:
@@ -134,7 +120,8 @@ def _apply_observation(
         except json.JSONDecodeError:
             memory.computed = None
     elif step.action == Tool.GENERATE_REPORT:
-        _commit_artifact(task_id, result, memory)
+        return _commit_artifact(task_id, result, memory)
+    return None
 
 
 def run_agent_loop(
@@ -220,8 +207,19 @@ def run_agent_loop(
 
             # OBSERVATION + DECISION
             if envelope["success"]:
-                _apply_observation(step, envelope["result"], memory, task_id)
+                observation_failure = _apply_observation(step, envelope["result"], memory, task_id)
                 save(memory)
+                if observation_failure is not None:
+                    # Section 4 mapping table row 6: the Verifier rejected
+                    # this artifact -- FAILED, no retry, no auto-revision
+                    # (BB-038; distinct from section 5.3's approval-rejection
+                    # revision, which never reaches this branch).
+                    return AgentLoopResult(
+                        outcome=AgentStatus.FAILED,
+                        reason=observation_failure,
+                        steps=traces,
+                        memory=memory,
+                    )
                 break  # CONTINUE to the next plan step
 
             if attempt < MAX_ATTEMPTS_PER_STEP:
