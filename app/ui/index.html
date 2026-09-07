@@ -74,16 +74,24 @@
 <!-- ============ SIGN IN (hidden once authenticated) ============ -->
 <div id="loginWrap" style="padding:14px;max-width:640px">
   <div class="box"><span class="lbl">Sign in</span>
-    <p class="muted" style="margin:0 0 12px">Identity comes from a verified session JWT &mdash; never a request body. Roles are enforced.</p>
+    <p class="muted" style="margin:0 0 12px">Identity comes from a verified session JWT &mdash; never a request body. Roles are enforced: the engineer who submits work cannot release it.</p>
+
+    <div class="muted" style="margin-bottom:6px">sign in as &mdash; one click, fills both fields</div>
+    <div class="row" style="margin-bottom:14px">
+      <button class="persona go" data-u="j.rao"   data-p="engineer-pw">Engineer &middot; j.rao</button>
+      <button class="persona go" data-u="a.singh" data-p="approver-pw">Approver &middot; a.singh</button>
+      <button class="persona go" data-u="s.mehta" data-p="admin-pw">Admin &middot; s.mehta</button>
+    </div>
+
     <div class="row" style="margin-bottom:10px">
       <div style="flex:1;min-width:150px"><div class="muted">username</div><input id="u" value="j.rao"></div>
       <div style="flex:1;min-width:150px"><div class="muted">password</div><input id="p" type="password" value="engineer-pw"></div>
     </div>
-    <div class="row"><button id="loginBtn" class="go">sign in</button></div>
+    <div class="row"><button id="loginBtn">sign in</button></div>
     <ul class="tree" style="margin-top:12px;color:var(--dim)">
-      <li>j.rao / engineer-pw &mdash; engineer, submits tasks</li>
-      <li>a.singh / approver-pw &mdash; approver, releases artifacts</li>
-      <li>s.mehta / admin-pw &mdash; admin, kill-switch</li>
+      <li>j.rao &mdash; engineer, maintenance dept, submits tasks</li>
+      <li>a.singh &mdash; approver, maintenance dept, releases artifacts</li>
+      <li>s.mehta &mdash; admin, security dept, kill-switch</li>
     </ul>
   </div>
 </div>
@@ -100,15 +108,9 @@
     </div>
 
     <div class="box"><span class="lbl">Resources / DB / Files</span>
-      <ul class="tree">
-        <li class="grp">MAINTENANCE_DEPT</li>
-        <li>pump_p101_history &middot; <span class="s-wait">CONFIDENTIAL</span></li>
-        <li>pump_p101_spec_sheet &middot; <span class="muted">INTERNAL</span></li>
-        <li class="grp" style="margin-top:6px">FINANCE_DEPT</li>
-        <li>q3_finance_report &middot; <span class="s-bad">acl:finance</span></li>
-        <li class="grp" style="margin-top:6px">REJECTED AT INGEST</li>
-        <li class="muted">pump_p102_notes &middot; no ACL sidecar</li>
-      </ul>
+      <div class="muted" style="margin-bottom:6px;font-size:11px" id="docsWho"></div>
+      <ul class="tree" id="docTree"><li class="muted">loading…</li></ul>
+      <div class="muted" style="margin-top:8px;font-size:11px">Click a file to open it. Access uses the same ACL rule as <b>rag.search</b> &mdash; nothing you cannot retrieve is readable here.</div>
     </div>
 
     <div class="box"><span class="lbl">Tools</span>
@@ -132,6 +134,7 @@
       <div class="tab on" data-t="task">task.prompt</div>
       <div class="tab" data-t="report">report.md</div>
       <div class="tab" data-t="trace">trace</div>
+      <div class="tab" data-t="file">file</div>
     </div>
 
     <div class="tabbody">
@@ -172,6 +175,15 @@
           <button id="repRefresh" style="margin-left:auto">reload</button>
         </div>
         <div class="rep" id="repBody"><span class="muted">No artifact yet. Run a task, then open this tab.</span></div>
+      </div>
+
+      <!-- FILE -->
+      <div id="pane-file" class="hidden">
+        <div class="row" style="margin-bottom:10px">
+          <b id="fileName">no file open</b>
+          <span id="fileMeta" class="muted"></span>
+        </div>
+        <div class="rep" id="fileBody"><span class="muted">Click a file in Resources / DB / Files.</span></div>
       </div>
 
       <!-- TRACE -->
@@ -221,6 +233,7 @@ function paint(){
   $('#bench').classList.toggle('hidden',!on);
   $('#logoutBtn').classList.toggle('hidden',!on);
   renderTools();
+  if(on) loadDocs();
 }
 function toast(m,k='e'){ $('#toast').innerHTML=`<div class="toast ${k==='o'?'t-o':'t-e'}">${m}</div>`; if(k==='o') setTimeout(()=>$('#toast').innerHTML='',4000); }
 function clearToast(){ $('#toast').innerHTML=''; }
@@ -252,14 +265,63 @@ $('#loginBtn').onclick=async()=>{ clearToast(); const b=$('#loginBtn'); busy(b,t
   }catch(e){ toast(e.message);} finally{ busy(b,false);} };
 $('#logoutBtn').onclick=()=>{ TOKEN=USER=null; localStorage.removeItem('c_tok'); localStorage.removeItem('c_usr'); paint(); };
 
+// One click fills BOTH fields and signs in. The previous form kept a stale
+// password when only the username was changed, which made every persona
+// except the default look like it "could not sign in".
+$$('.persona').forEach(b=>b.onclick=()=>{
+  $('#u').value=b.dataset.u; $('#p').value=b.dataset.p; $('#loginBtn').click();
+});
+
 /* ---------- tabs ---------- */
 $$('.tab').forEach(t=>t.onclick=()=>{
   $$('.tab').forEach(x=>x.classList.remove('on')); t.classList.add('on');
-  ['task','report','trace'].forEach(n=>$('#pane-'+n).classList.toggle('hidden', n!==t.dataset.t));
+  ['task','report','trace','file'].forEach(n=>$('#pane-'+n).classList.toggle('hidden', n!==t.dataset.t));
   if(t.dataset.t==='report') loadReport();
 });
 function showTab(n){ $$('.tab').forEach(x=>x.classList.toggle('on',x.dataset.t===n));
-  ['task','report','trace'].forEach(m=>$('#pane-'+m).classList.toggle('hidden',m!==n)); }
+  ['task','report','trace','file'].forEach(m=>$('#pane-'+m).classList.toggle('hidden',m!==n)); }
+
+/* ---------- documents ---------- */
+async function loadDocs(){
+  if(!TOKEN) return;
+  try{
+    const d=await api('/documents');
+    $('#docsWho').textContent=`you: ${d.requester.department} · ${d.requester.clearance}`;
+    const byDept={};
+    d.documents.forEach(x=>(byDept[x.department]=byDept[x.department]||[]).push(x));
+    let html='';
+    for(const dept of Object.keys(byDept).sort()){
+      html+=`<li class="grp" style="margin-top:6px">${dept.toUpperCase()}_DEPT</li>`;
+      byDept[dept].forEach(x=>{
+        const cls = x.readable?'':'s-bad';
+        const mark = x.readable
+          ? `<span class="muted">${x.classification}</span>`
+          : `<span class="s-bad">withheld</span>`;
+        html+=`<li><a href="#" class="doc ${cls}" data-id="${x.document_id}" title="${x.readable?'open':x.reason}">${x.document_id}</a> · ${mark}</li>`;
+      });
+    }
+    html+=`<li class="grp" style="margin-top:6px">REJECTED AT INGEST</li>
+           <li class="muted" title="no .meta.json sidecar — section 6.9 rejects it outright">pump_p102_notes · no ACL sidecar</li>`;
+    $('#docTree').innerHTML=html;
+    $$('.doc').forEach(a=>a.onclick=e=>{e.preventDefault();openDoc(a.dataset.id);});
+  }catch(e){ $('#docTree').innerHTML=`<li class="s-bad">${e.message}</li>`; }
+}
+
+async function openDoc(id){
+  showTab('file');
+  $('#fileName').textContent=id; $('#fileMeta').textContent=''; $('#fileBody').textContent='loading…';
+  try{
+    const d=await api(`/documents/${id}`);
+    $('#fileMeta').textContent=`${d.classification} · acl:[${d.acl.join(', ')}] · ${d.department} · ${d.chunks} chunks`;
+    $('#fileBody').textContent=d.content||d.read_error||'(empty)';
+    cli(`opened ${id} (${d.classification})`,'ok');
+  }catch(e){
+    $('#fileMeta').textContent='';
+    $('#fileBody').innerHTML=`<span class="s-bad">${e.message}</span>
+      <div class="muted" style="margin-top:10px">This is the ACL rule doing its job: the same check <b>rag.search</b> applies inside the Data Plane, applied to you.</div>`;
+    cli(`${id}: ${e.message}`,'bad');
+  }
+}
 
 /* ---------- tools ---------- */
 function renderTools(){
@@ -422,6 +484,8 @@ const HELP=`commands
   /status [task_id]       task status
   /trace [task_id]        event trace
   /report [artifact_id]   print the generated report
+  /files                  list the corpus, with what you may read
+  /open <document_id>     open a document (ACL enforced)
   /approve [task_id]      approve and release
   /reject <comment>       reject, triggers the one bounded revision
   admin disable-tool <t>  kill-switch a tool
@@ -446,6 +510,11 @@ $('#cliIn').addEventListener('keydown',async e=>{
       ARTIFACT=a.artifact_id;               // so the report pane resolves it too
       cli(`--- ${a.artifact_id} (${a.status}, ${a.classification}) ---`); cli(a.content||'(empty)');
       showTab('report'); await loadReport(); }
+    else if(cmd==='/files'){ const d=await api('/documents');
+      cli(`you: ${d.requester.department} · ${d.requester.clearance}`);
+      d.documents.forEach(x=>cli(`  ${x.readable?'[ok] ':'[--] '}${x.document_id}  ${x.classification}  acl:[${x.acl.join(',')}]${x.readable?'':'  '+x.reason}`, x.readable?null:'bad'));
+      await loadDocs(); }
+    else if(cmd==='/open'){ if(!arg) return cli('usage: /open <document_id>','bad'); await openDoc(arg); }
     else if(cmd==='/approve'){ if(arg) TASK=arg; await decide('APPROVED',$('#approveBtn')); }
     else if(cmd==='/reject'){ $('#cmt').value=arg; await decide('REJECTED',$('#rejectBtn')); }
     else if(cmd==='admin'){
