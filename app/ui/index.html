@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Citadel — Operator Console</title>
+<style>
+  :root {
+    --ground:#eef1ef; --surface:#f7f9f8; --panel:#fff;
+    --ink:#16202a; --soft:#46555f; --faint:#7d8b92;
+    --rule:#c9d2cf; --accent:#2f6d7d; --accent-dim:#dbe7e9;
+    --permit:#3f7d54; --deny:#b4443a; --hold:#b57d24;
+    --mono:"IBM Plex Mono",Consolas,"SF Mono",monospace;
+    --sans:"Segoe UI",system-ui,-apple-system,sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground:#10161a; --surface:#182026; --panel:#1d262c;
+      --ink:#e6ecea; --soft:#a4b3b6; --faint:#71828a;
+      --rule:#2c3a41; --accent:#6fb3c2; --accent-dim:#1e3138;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.55}
+  header{border-bottom:1.5px solid var(--rule);background:var(--surface);padding:14px 22px;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;position:sticky;top:0;z-index:5}
+  header h1{margin:0;font-size:20px;letter-spacing:-.01em}
+  header .tag{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent)}
+  #who{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--faint)}
+  main{max-width:1180px;margin:0 auto;padding:22px;display:grid;gap:18px}
+  .panel{background:var(--panel);border:1.5px solid var(--rule);border-radius:10px;padding:18px}
+  .panel h2{margin:0 0 4px;font-size:15px;letter-spacing:-.005em}
+  .panel .hint{margin:0 0 14px;color:var(--faint);font-size:12.5px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  label{font-family:var(--mono);font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--faint);display:block;margin-bottom:5px}
+  input,select,textarea{font-family:var(--sans);font-size:14px;padding:8px 11px;border:1.5px solid var(--rule);border-radius:7px;background:var(--surface);color:var(--ink);width:100%}
+  textarea{min-height:78px;resize:vertical}
+  button{font-family:var(--sans);font-size:13.5px;font-weight:600;padding:9px 16px;border-radius:7px;border:1.5px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
+  button:hover:not(:disabled){filter:brightness(1.08)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.ghost{background:transparent;color:var(--accent)}
+  button.danger{background:var(--deny);border-color:var(--deny)}
+  button.ok{background:var(--permit);border-color:var(--permit)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:680px){.grid2{grid-template-columns:1fr}}
+  .status{font-family:var(--mono);font-size:12px;padding:2px 9px;border-radius:999px;border:1.5px solid currentColor;display:inline-block}
+  .s-ok{color:var(--permit)} .s-bad{color:var(--deny)} .s-wait{color:var(--hold)} .s-run{color:var(--accent)}
+  pre{font-family:var(--mono);font-size:12px;background:var(--surface);border:1.5px solid var(--rule);border-radius:8px;padding:12px;overflow-x:auto;margin:0;white-space:pre-wrap;word-break:break-word}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:6px 9px;border-bottom:1px solid var(--rule);vertical-align:top}
+  th{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+  td.ev{font-family:var(--mono);font-weight:600}
+  tr.deny td.ev{color:var(--deny)} tr.exec td.ev{color:var(--permit)}
+  tr.rel td.ev{color:var(--permit);font-weight:700} tr.pol td.ev{color:var(--accent)}
+  .toast{padding:10px 13px;border-radius:8px;font-size:13px;margin-bottom:12px;border:1.5px solid}
+  .t-err{background:#fbeceb;border-color:var(--deny);color:#4a1512}
+  .t-ok{background:#eaf3ec;border-color:var(--permit);color:#16301f}
+  @media (prefers-color-scheme: dark){.t-err{background:#2a1614;color:#f0c9c5}.t-ok{background:#14261a;color:#c4e2ce}}
+  .hidden{display:none!important}
+  .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--accent-dim);border-top-color:var(--accent);border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:6px}
+  @keyframes s{to{transform:rotate(360deg)}}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-family:var(--mono);font-size:11px;color:var(--faint);margin-top:10px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Citadel</h1>
+  <span class="tag">Operator Console</span>
+  <span id="who">not signed in</span>
+</header>
+
+<main>
+  <div id="toast"></div>
+
+  <!-- LOGIN -->
+  <section class="panel" id="loginPanel">
+    <h2>Sign in</h2>
+    <p class="hint">Identity comes from a verified session JWT (§6.4) &mdash; never from a request body. Demo users:
+      <code>j.rao</code>/<code>engineer-pw</code> (engineer, submits tasks) &middot;
+      <code>a.singh</code>/<code>approver-pw</code> (approver, releases artifacts) &middot;
+      <code>s.mehta</code>/<code>admin-pw</code> (admin, kill-switch).
+      Roles are enforced: approving as the engineer is refused, by design.</p>
+    <div class="grid2">
+      <div><label>Username</label><input id="u" value="j.rao" autocomplete="username"></div>
+      <div><label>Password</label><input id="p" type="password" value="engineer-pw" autocomplete="current-password"></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button id="loginBtn">Sign in</button>
+      <button class="ghost" id="logoutBtn">Sign out</button>
+    </div>
+  </section>
+
+  <!-- SUBMIT -->
+  <section class="panel">
+    <h2>Submit a task</h2>
+    <p class="hint">Runs synchronously: plan &rarr; agent loop &rarr; tool calls through the Tool Gateway. A real run takes 20&ndash;40s (local model + sandbox container).</p>
+    <label>Task</label>
+    <textarea id="text">Using the available internal maintenance documents, identify the recent maintenance history of Pump P-101 and generate a short maintenance summary report.</textarea>
+    <div class="row" style="margin-top:12px">
+      <div style="width:220px"><label>Classification</label>
+        <select id="cls">
+          <option>CONFIDENTIAL</option><option>INTERNAL</option><option>PUBLIC</option>
+        </select>
+      </div>
+      <button id="taskBtn" style="align-self:flex-end">Run task</button>
+      <button class="ghost" id="denyBtn" style="align-self:flex-end">Run denial-path task (§1.2)</button>
+    </div>
+  </section>
+
+  <!-- RESULT -->
+  <section class="panel hidden" id="resPanel">
+    <h2>Task <span id="tid" style="font-family:var(--mono)"></span> <span id="tstat" class="status"></span></h2>
+    <p class="hint" id="treason"></p>
+    <div class="row">
+      <button class="ghost" id="refreshBtn">Refresh status</button>
+      <button class="ok" id="approveBtn">Approve &amp; release</button>
+      <button class="danger" id="rejectBtn">Reject (triggers revision)</button>
+    </div>
+    <div style="margin-top:12px" class="hidden" id="cmtWrap">
+      <label>Rejection comment</label><input id="cmt" placeholder="What needs fixing?">
+    </div>
+  </section>
+
+  <!-- TRACE -->
+  <section class="panel hidden" id="tracePanel">
+    <h2>Audit trace</h2>
+    <p class="hint">Every ALLOW, DENY and release, hash-chained (§6.12). Denials are first-class outcomes, not errors.</p>
+    <table><thead><tr><th>#</th><th>Event</th><th>Actor</th><th>Detail</th></tr></thead>
+      <tbody id="traceBody"></tbody></table>
+    <div class="legend">
+      <span style="color:var(--permit)">&#9632; executed / released</span>
+      <span style="color:var(--deny)">&#9632; denied</span>
+      <span style="color:var(--accent)">&#9632; policy decision</span>
+    </div>
+  </section>
+
+  <!-- ADMIN -->
+  <section class="panel">
+    <h2>Emergency control (§6.8)</h2>
+    <p class="hint">The one kill-switch. Disabling a tool denies it on the next call even for an agent holding a still-valid capability token. Requires the admin role &mdash; sign in as <code>s.mehta</code>.</p>
+    <div class="row">
+      <div style="width:240px"><label>Tool</label>
+        <select id="tool"><option>python.execute</option><option>rag.search</option><option>generate_report</option></select>
+      </div>
+      <button class="danger" id="disableBtn" style="align-self:flex-end">Disable tool</button>
+      <button class="ghost" id="enableBtn" style="align-self:flex-end">Re-enable</button>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let TOKEN = localStorage.getItem('citadel_token') || null;
+let USER  = localStorage.getItem('citadel_user') || null;
+let TASK  = null;
+
+function setWho(){ $('#who').textContent = USER ? `signed in as ${USER}` : 'not signed in'; }
+setWho();
+
+function toast(msg, kind='err'){
+  $('#toast').innerHTML = `<div class="toast ${kind==='ok'?'t-ok':'t-err'}">${msg}</div>`;
+  if(kind==='ok') setTimeout(()=>{ $('#toast').innerHTML=''; }, 4000);
+}
+function clearToast(){ $('#toast').innerHTML=''; }
+
+async function api(path, opts={}){
+  const h = Object.assign({'Content-Type':'application/json'}, opts.headers||{});
+  if(TOKEN) h['Authorization'] = 'Bearer ' + TOKEN;
+  const r = await fetch(path, Object.assign({}, opts, {headers:h}));
+  const body = await r.json().catch(()=>({}));
+  if(!r.ok){
+    const d = body.detail && body.detail.error ? body.detail.error : null;
+    throw new Error(d ? `${d.code}: ${d.message}` : (body.detail || `HTTP ${r.status}`));
+  }
+  return body;
+}
+
+function busy(btn, on, label){
+  btn.disabled = on;
+  if(on){ btn.dataset.old = btn.textContent; btn.innerHTML = `<span class="spin"></span>${label||'Working…'}`; }
+  else if(btn.dataset.old){ btn.textContent = btn.dataset.old; }
+}
+
+$('#loginBtn').onclick = async () => {
+  clearToast();
+  const b = $('#loginBtn'); busy(b, true, 'Signing in…');
+  try{
+    const r = await api('/login', {method:'POST', body: JSON.stringify({username:$('#u').value, password:$('#p').value})});
+    TOKEN = r.access_token; USER = $('#u').value;
+    localStorage.setItem('citadel_token', TOKEN); localStorage.setItem('citadel_user', USER);
+    setWho(); toast('Signed in. Session JWT cached.', 'ok');
+  }catch(e){ toast(e.message); } finally{ busy(b,false); }
+};
+
+$('#logoutBtn').onclick = () => {
+  TOKEN=null; USER=null; localStorage.removeItem('citadel_token'); localStorage.removeItem('citadel_user');
+  setWho(); toast('Signed out.', 'ok');
+};
+
+async function runTask(text){
+  clearToast();
+  const b = $('#taskBtn'); busy(b, true, 'Planning & executing…');
+  $('#denyBtn').disabled = true;
+  try{
+    const r = await api('/task', {method:'POST', body: JSON.stringify({text, classification:$('#cls').value})});
+    TASK = r.task_id;
+    showResult(r);
+    await loadTrace();
+  }catch(e){ toast(e.message); }
+  finally{ busy(b,false); $('#denyBtn').disabled=false; }
+}
+
+$('#taskBtn').onclick = () => runTask($('#text').value);
+$('#denyBtn').onclick = () => runTask('Summarise the Q3 finance report and its headcount figures.');
+
+function statusClass(s){
+  if(s==='COMPLETED') return 's-ok';
+  if(s==='FAILED') return 's-bad';
+  if(s==='WAITING_FOR_APPROVAL') return 's-wait';
+  return 's-run';
+}
+function showResult(r){
+  $('#resPanel').classList.remove('hidden');
+  $('#tid').textContent = r.task_id;
+  const st = r.status || r.task_status;
+  $('#tstat').textContent = st;
+  $('#tstat').className = 'status ' + statusClass(st);
+  $('#treason').textContent = r.reason || '';
+  const waiting = st === 'WAITING_FOR_APPROVAL';
+  $('#approveBtn').classList.toggle('hidden', !waiting);
+  $('#rejectBtn').classList.toggle('hidden', !waiting);
+  $('#cmtWrap').classList.toggle('hidden', !waiting);
+}
+
+$('#refreshBtn').onclick = async () => {
+  if(!TASK) return;
+  try{ const r = await api(`/tasks/${TASK}`); showResult(Object.assign({task_id:TASK}, r)); await loadTrace(); }
+  catch(e){ toast(e.message); }
+};
+
+async function loadTrace(){
+  if(!TASK) return;
+  try{
+    const t = await api(`/tasks/${TASK}/trace`);
+    const tb = $('#traceBody'); tb.innerHTML='';
+    t.events.forEach(e=>{
+      const tr = document.createElement('tr');
+      const ty = e.event_type;
+      if(ty==='TOOL_DENIED') tr.className='deny';
+      else if(ty==='TOOL_EXECUTED') tr.className='exec';
+      else if(ty==='ARTIFACT_RELEASED'||ty==='APPROVAL_GRANTED') tr.className='rel';
+      else if(ty==='POLICY_DECISION') tr.className='pol';
+      let detail='';
+      const p=e.payload||{};
+      if(p.decision) detail=`decision=${p.decision}`;
+      if(p.reason) detail+= (detail?' · ':'')+p.reason;
+      if(p.tool) detail=(detail?detail+' · ':'')+p.tool;
+      if(p.filtered_documents && p.filtered_documents.length) detail+=` · filtered: ${p.filtered_documents.map(d=>d.document_id||d).join(', ')}`;
+      if(p.results_count!==undefined) detail+=` · ${p.results_count} results`;
+      tr.innerHTML=`<td>${e.seq}</td><td class="ev">${ty}</td><td style="font-family:var(--mono);color:var(--faint)">${e.actor_id||'-'}</td><td>${detail||''}</td>`;
+      tb.appendChild(tr);
+    });
+    $('#tracePanel').classList.remove('hidden');
+  }catch(e){ toast(e.message); }
+}
+
+async function findApprovalId(){
+  const t = await api(`/tasks/${TASK}/trace`);
+  for(const e of t.events){
+    if(e.event_type==='APPROVAL_REQUESTED' && e.payload && e.payload.approval_id) return e.payload.approval_id;
+  }
+  throw new Error('No APPROVAL_REQUESTED event yet — the task has not produced a verified artifact.');
+}
+
+async function decide(decision, btn){
+  clearToast(); busy(btn, true, 'Submitting…');
+  try{
+    const approval_id = await findApprovalId();
+    const r = await api(`/approvals/${approval_id}/decision`, {method:'POST',
+      body: JSON.stringify({decision, comment: $('#cmt').value || null})});
+    showResult(Object.assign({task_id: r.task_id, status: r.task_status}, r));
+    await loadTrace();
+    toast(`${decision}. artifact=${r.artifact_status||'-'} task=${r.task_status}`, 'ok');
+  }catch(e){ toast(e.message); } finally{ busy(btn,false); }
+}
+$('#approveBtn').onclick = e => decide('APPROVED', e.target);
+$('#rejectBtn').onclick  = e => decide('REJECTED', e.target);
+
+async function toggleTool(disabled, btn){
+  clearToast(); busy(btn,true,'Applying…');
+  try{
+    await api(`/admin/tools/${$('#tool').value}/disable`, {method:'POST', body: JSON.stringify({disabled})});
+    toast(`${$('#tool').value} ${disabled?'DISABLED':'re-enabled'}. Takes effect on the next call, even for a valid capability.`, 'ok');
+  }catch(e){ toast(e.message); } finally{ busy(btn,false); }
+}
+$('#disableBtn').onclick = e => toggleTool(true, e.target);
+$('#enableBtn').onclick  = e => toggleTool(false, e.target);
+</script>
+</body>
+</html>

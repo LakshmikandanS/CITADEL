@@ -40,6 +40,7 @@ from app.identity.router import router as identity_router
 from app.orchestrator.router import router as orchestrator_router
 from app.orchestrator.startup import configure as configure_orchestrator
 from app.policy.router import router as admin_router
+from app.ui.router import router as ui_router
 
 
 def create_app() -> FastAPI:
@@ -56,6 +57,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_router)
     app.include_router(orchestrator_router)
     app.include_router(approval_router)
+    app.include_router(ui_router)
 
     @app.on_event("startup")
     def _startup() -> None:  # pragma: no cover -- exercised by running the app for real
