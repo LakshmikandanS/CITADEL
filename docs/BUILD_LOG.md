@@ -27,9 +27,13 @@ and the decisions later steps must not contradict.
   - `qwen3:4B` — returns an **empty** response under `format=json`; it is a
     thinking model and the reasoning trace swallows the output. Do not use it
     for structured planning without extra handling.
-- **Docker is being installed** (it was absent entirely, not merely stopped).
-  Step 5 (Execution Service) and §6.13's network-isolation test are the two
-  things gated on it.
+- **Docker Desktop installed and the daemon running** — client/server 29.7.2,
+  verified 2026-09-07. Step 5's live-container tests and §6.13's
+  network-isolation proof both run against it for real; they skip with a clear
+  reason if the daemon is down, so check for skips before believing a green run.
+- GPU: **RTX 5060 Laptop, 8151 MiB**. Ollama offloads both models to CUDA
+  automatically (`ollama ps` shows `100% GPU`). `hermes3` + `nomic-embed-text`
+  co-resident use ~5.9 GB, so a third concurrent model would spill to CPU.
 
 Run everything:
 
@@ -279,8 +283,392 @@ was correct — it exposes exactly `/login` and
 | Tool backends | `register_backend(tool, fn)`; the gateway never learns what a backend does |
 | Emergency controls | `tool_disabled` is one registry behind `get_registry()`/`set_registry()` |
 | Capability revocation | Add a check inside Step A; the TTL contract stays as the floor |
-## Step 5 — `execution-service` — NOT STARTED
-## Step 6 — `data-plane-rag` — NOT STARTED
+## Step 5 — `execution-service` — COMPLETE
+
+**Status:** 97 passed, 12 skipped (up from step 4's 85 passed / 14 skipped —
+the two `execution-zone` §9 lines that were individually skipped are now real
+tests, and 10 new tests were added: 2 negative controls for the two
+structural checks, plus 8 in `tests/test_execution.py`). The 12 remaining
+skips all belong to steps 6-9 (`grep SKIPPED` shows only
+`data-plane-rag` / `orchestrator` / `artifact-pipeline` / CLI reasons).
+
+**Demo:** `.venv/Scripts/python -m tests.demos.step5_execution`
+Starts the Execution Service as a real, separate `python -m execution_service`
+subprocess, registers the real `python.execute` backend, and drives four
+calls through the whole Tool Gateway against real one-shot Docker
+containers: the §1.1 step 12 maintenance-date computation, the §6.13
+no-network proof, a memory-limit trip, and a timeout trip. Confirms zero
+containers remain on the daemon afterward.
+
+This is the note file for step 5; `docs/BUILD_LOG.md` itself was left
+untouched (owned by another agent working in parallel) and should be merged
+by hand.
+
+### Delivered
+
+```
+execution_service/                      the isolated execution zone -- a SEPARATE OS process
+    settings.py                         env-driven config, os.environ, style matches app/config.py
+    sandbox.py                          the ONLY module in the system that imports `docker`
+    schemas.py                          pydantic request/response shapes for the one HTTP endpoint
+    main.py                             FastAPI app: POST /execute, GET /health
+    __main__.py                         `python -m execution_service` entry point
+
+app/execution/                          the trusted zone's HTTP client of the above -- NO docker import
+    settings.py                         CITADEL_EXECUTION_SERVICE_URL, HTTP timeout
+    backend.py                          python_execute(request) -> result; raises on failure (echo.py's pattern)
+
+docker/
+    execution-service.Dockerfile        builds the ONLY image that mounts /var/run/docker.sock
+    execution-service.requirements.txt  fastapi, uvicorn, pydantic, docker, requests
+    app.Dockerfile                      builds the trusted zone's image -- no `docker` package, ever
+    app.requirements.txt                fastapi, uvicorn, sqlalchemy, pydantic, pyjwt, bcrypt, httpx
+
+docker-compose.yml                      two networks: trusted_zone, execution_channel;
+                                         execution-service is on execution_channel only and is the
+                                         only service with a docker.sock volume mount
+
+tests/test_security.py                  test_execution_zone_has_no_code_path_to_postgres,
+                                         test_execution_zone_has_no_code_path_to_the_docker_socket,
+                                         un-skipped, implemented as static AST checks (+2 negative controls)
+tests/test_execution.py                 8 live-Docker tests (round-trip, §6.13 network proof,
+                                         timeout, resource limit, EXECUTION_ERROR through the
+                                         full gateway envelope, container-destroyed checks)
+tests/demos/step5_execution.py          the step-5 demo
+```
+
+### The contract steps 6-9 call
+
+Nothing new. Step 5 is a pure backend attachment — the same seam step 4 built:
+
+```python
+from app.execution import register  # or: from app.execution.backend import python_execute
+register()  # register_backend(Tool.PYTHON_EXECUTE, python_execute)
+```
+
+Call it once at process startup (the Orchestrator, step 7, is the natural
+place — the same way step 6 will call whatever it names for `rag.search`).
+Nothing about invoking `python.execute` differs from invoking any other
+tool: `issue_for_step(...)` then `invoke(...)`, exactly as step 4 documented.
+The argument contract is one key: `{"code": "<python source>"}`, with an
+optional `timeout_seconds` override (clamped server-side, never extended
+past `CITADEL_EXECUTION_MAX_TIMEOUT_SECONDS`). The result is
+`{"stdout": str, "stderr": str, "exit_code": int}`.
+
+### Decisions later steps must respect
+
+1. **The trusted zone never imports the `docker` package or references a
+   Docker socket path, anywhere.** Enforced structurally, not by
+   convention: `test_execution_zone_has_no_code_path_to_the_docker_socket`
+   walks every file under `app/` via AST and fails on either. If a later
+   step needs to run code, it calls `app.execution.backend.python_execute`
+   (or, better, registers it and goes through the gateway) — it does not
+   reach for the Docker SDK itself.
+
+2. **A nonzero `exit_code` is a normal result, not a failure.** Only a real
+   infrastructure fault — timeout, an OOM/resource-limit kill, or the
+   container/daemon crashing outright — raises `SandboxError` and becomes
+   `EXECUTION_ERROR`. `python -c "raise ValueError()"` is a *successful*
+   `python.execute` call that happens to report `exit_code=1` and the
+   traceback in `stderr`. Conflating the two would make every buggy
+   agent-generated script look like an infrastructure failure.
+
+3. **The sandbox container has no host mount at all**, not merely one
+   scoped to a scratch directory. Code is passed as the container's own
+   command (`python -c <code>`), and the container's root filesystem is
+   `read_only=True` with an in-memory `tmpfs` at `/tmp` for anything the
+   code itself needs to write. This satisfies "no host filesystem mount
+   beyond a scratch input/output directory" with the strongest available
+   reading. There is currently no way to get a *file* back out of a call —
+   only stdout/stderr/exit_code — which is sufficient for §1.1 step 12's
+   shape (parse text, print a computed result) and is a deliberate
+   MVP-scope limit, not an oversight; see Phase-2 seams below if a later
+   step needs artifacts written to a scratch dir instead.
+
+4. **`network_disabled=True`, not a restrictive network.** The container is
+   given no network interface at all (other than loopback) — stronger than
+   "no route to the internet." This is what `tests/test_execution.py`'s
+   §6.13 test and the demo's section 2 both prove live: an outbound HTTPS
+   attempt and a raw TCP attempt from inside the container both fail with
+   `gaierror`/`URLError` (no DNS resolution is even possible), not merely a
+   connection refusal.
+
+5. **§6.13 names `curl https://example.com` as the check; this sandbox runs
+   plain `python:3.12-slim`, which does not ship a `curl` binary and has no
+   network route to install one.** The network test issues the equivalent
+   real outbound request with Python's stdlib (`urllib.request` and a raw
+   `socket.create_connection`) instead. Documented in
+   `tests/test_execution.py`'s module docstring and flagged here as the one
+   place the design doc's literal wording had to be adapted rather than
+   followed exactly — the guarantee tested (no route exists) is identical.
+
+6. **The Execution Service's own HTTP response already uses the §6.6
+   envelope's five-key shape** (`success`/`result`/`error`/`metadata`,
+   always HTTP 200) even though it has no `tool` field to route on. This
+   means `app/execution/backend.py` never has to translate between two
+   different failure shapes — it either returns `body["result"]` or raises
+   `ExecutionServiceError(message)`, and the Tool Gateway's existing
+   exception handling (unchanged from step 4) does the rest. Any later
+   service placed behind a similar HTTP boundary can copy this shape rather
+   than inventing its own.
+
+7. **Resource limits are a server-side setting
+   (`CITADEL_EXECUTION_MEMORY_LIMIT`/`_CPU_LIMIT`/`_PIDS_LIMIT`), not a
+   per-call argument.** Only `timeout_seconds` is caller-overridable (and
+   only downward from the server's ceiling). A caller cannot ask for a
+   larger memory or CPU allowance than the operator configured — consistent
+   with the design doc's "resource + time limits" being a property of the
+   execution zone, not something an agent negotiates.
+
+8. **One Docker client per Execution Service process, reused across calls;
+   containers are never reused.** `execution_service/sandbox.py` keeps one
+   lazily-created `docker.DockerClient` (a connection, not a container) and
+   calls `client.containers.run(...)` fresh every time, followed
+   unconditionally by `container.remove(force=True)` in a `finally` block —
+   whether the run succeeded, crashed, or timed out. `tests/test_execution.py`
+   asserts the set of containers on the daemon is identical before and after
+   every live test, including the timeout and OOM cases.
+
+9. **`execution_service/` is not a subpackage of `app/`, and nothing may
+   make it one.** It is a sibling top-level package specifically so
+   `test_execution_zone_has_no_code_path_to_the_docker_socket`'s `app/`-only
+   walk stays meaningful, and so `docker/app.Dockerfile`'s image build never
+   pulls in the `docker` package transitively.
+
+### Phase-2 seams
+
+| Seam | Extend by |
+|---|---|
+| Scratch input/output files | Add a bind mount of a per-call temp dir instead of (or alongside) passing code via `-c`; `sandbox.run_python` is the one place container creation happens |
+| Resource limits | All in `execution_service/settings.py`, env-driven; no code change to tighten/loosen |
+| Sandbox image | `CITADEL_EXECUTION_SANDBOX_IMAGE`; swap in a hardened/derived image (e.g. one with `curl` installed) without touching `sandbox.py` |
+| Container pooling / warm starts | Explicitly not built (non-goal) — `sandbox.run_python` creates and destroys unconditionally; a pool would replace the body of that one function |
+| Network topology | `docker-compose.yml`'s `execution_channel` network is where a real Postgres/vector-store service would need to NOT be attached; today neither exists in compose (SQLite is used, per step 3) so this is asserted structurally (§ code-path test) rather than by a running network test |
+| Per-connection egress audit | Not built (non-goal, §6.13 declares it out of scope for this slice) — `network_disabled=True` is binary, not logged |
+
+### Ambiguities resolved, flagged for the project owner
+
+- **§6.13's `curl` wording vs. the mandated `python:3.12-slim` image**: see
+  decision 5 above. Resolved by using an equivalent real network attempt via
+  Python's stdlib rather than adding `curl` to (or deriving from) the
+  sandbox image, since the design doc is explicit elsewhere that the image
+  is plain `python:3.12-slim`.
+- **What "scratch input/output directory" means when there is no file-based
+  I/O contract yet** (the Orchestrator that would populate one doesn't exist
+  until step 7): resolved by using zero host mounts and an in-memory tmpfs
+  for `/tmp`, and an argument contract of `{"code": str}` in, `{stdout,
+  stderr, exit_code}` out — satisfying §1.1 step 12's actual shape (parse
+  retrieved text, print a computed result) without inventing an unused file
+  contract. If step 7 needs a real file artifact out of a `python.execute`
+  call, that is a deliberate, small extension to `sandbox.run_python`, not a
+  redesign.
+- **Where the Execution Service's settings module lives**: per the task's
+  explicit instruction, kept out of `app/config.py` entirely. Two separate
+  settings modules exist — `execution_service/settings.py` (the isolated
+  process's own config) and `app/execution/settings.py` (the trusted zone's
+  client config) — deliberately never merged, mirroring the two-process
+  split itself.
+
+---
+## Step 6 — `data-plane-rag` — COMPLETE
+
+**Status:** 105 passed, 9 skipped (up from step 5's 97 passed / 12 skipped —
+`tests/test_rag.py`'s three checklist stubs are now real tests, and 5 more
+were added: classification-only filtering, `provenance_id`, and two
+end-to-end cases through the real Tool Gateway). The 9 remaining skips all
+belong to steps 7-9 (`orchestrator` / `artifact-pipeline` / CLI reasons).
+Confirmed on two consecutive full-suite runs; no flakiness from this step.
+
+*(Note for whoever merges this: at various points while this step was being
+built, the full suite showed transient failures/errors entirely inside
+`tests/test_security.py` and `tests/test_execution.py` while `execution-service`
+was mid-edit on those files concurrently — reproduced even with
+`tests/test_rag.py` excluded from the run, so it was not this step's doing.
+By the final run above the other agent's work had stabilized and the whole
+suite is green.)*
+
+**Demo:** `.venv/Scripts/python -m tests.demos.step6_rag`
+Shows the sidecar rejection (both a single-document and a whole-directory
+ingest), ingests the legitimate corpus, then runs three real `rag.search`
+calls through the whole Tool Gateway with the real Ollama embedding model:
+the happy path, the section 1.2 denial path (returns zero rows), and the
+classification variant (INTERNAL task, CONFIDENTIAL document excluded).
+Prints the `EVIDENCE_RETRIEVED` audit trail and verifies the hash chain.
+
+### Delivered
+
+```
+app/rag/
+    settings.py      env-driven config (os.environ directly, style matches app/config.py)
+    sidecar.py        the mandatory <doc>.meta.json check -- MissingSidecarError / InvalidSidecarError
+    chunking.py        paragraph-based chunk_text(); page = 1-based chunk ordinal, honestly mapped
+    embeddings.py      embed_text() via Ollama /api/embeddings (nomic-embed-text), numpy-free cosine
+    store.py           VectorStore (in-memory, JSON save/load); get_store()/set_store()/reset_store()
+    ingest.py          ingest_document / ingest_paths / ingest_directory / discover_documents
+    evidence.py         Evidence -- design doc section 3's object; provenance_id IS evidence_id
+    search.py          Requester, search() -- the section 6.9 ACL/classification filter + ranking
+    backend.py          rag_search_backend(ToolRequest) -- the registered Tool.RAG_SEARCH backend
+    __init__.py         re-exports
+
+data/                  unchanged -- already built; read, not written, by this step
+tests/test_rag.py       8 tests: the 3 checklist lines + 5 more (see below)
+tests/demos/step6_rag.py  the step-6 demo
+docs/notes/step6.md      this file
+```
+
+### The contract step 7 calls
+
+One registration call, the same seam step 4 documented and step 5 already
+used for `python.execute`:
+
+```python
+from app.policy import Tool
+from app.tool_gateway import register_backend
+from app.rag.backend import rag_search_backend
+
+register_backend(Tool.RAG_SEARCH, rag_search_backend)
+```
+
+Call it once at process startup (the Orchestrator, step 7, is the natural
+place). Before that, the store needs data in it — call
+`app.rag.ingest.ingest_directory(DATA_ROOT, store=app.rag.get_store())` once
+at startup too (or `ingest_paths` for an explicit list, if the corpus is
+known to contain a fixture without a sidecar and that document is meant to
+stay excluded — see decision 3 below). Nothing about invoking `rag.search`
+differs from any other tool: `issue_for_step(...)` then `invoke(...)`,
+exactly as step 4 documented. The argument contract is one key:
+`{"query": "<free text>"}`. The result is `{"results": [...]}`, each row
+shaped exactly per design doc section 3/6.9 (`evidence_id`, `document_id`,
+`document_version`, `page`, `text`, `classification`, `acl`,
+`provenance_id`), plus one extra, non-contract field: `score` (the cosine
+similarity that produced its rank), included for transparency and safely
+ignorable.
+
+### Decisions later steps must respect
+
+1. **Filtering happens strictly before ranking, and strictly before an
+   `Evidence` object is ever built.** `app/rag/search.py::search()` checks
+   `_passes()` (classification, then ACL) first; a denied `Chunk` is
+   recorded in `filtered_documents` by `document_id`/`classification`/`acl`
+   only — never by its `text`, and never scored, embedded into a result, or
+   returned and then dropped. This is the property the mission's denial-path
+   demo depends on: `test_out_of_scope_document_is_filtered_before_reaching_the_agent`
+   asserts `"text" not in denied.to_dict()` as well as the empty result list.
+
+2. **The same lattice, never string comparison.** `_passes()` calls
+   `app.db.state_machines.Classification.exceeds()` and the same
+   ACL-disjoint-set test `app.policy.engine._evaluate` uses — reading
+   `requester.classification_max`/`requester.department` instead of a task
+   row. This is deliberate duplication of the *shape* of the Policy Engine's
+   two data rules, not a divergence from them: the Policy Engine only
+   decided `rag.search` is allowed as an operation (via
+   `task_resource(task_id)`, since the concrete documents are not known
+   until the Data Plane looks them up); this module is what decides which
+   specific documents may appear in the result set, and it has to reach the
+   verdict the Policy Engine *would* reach if it were looking at that exact
+   document.
+
+3. **Ingestion is atomic with respect to the sidecar check, at both
+   granularities.** `ingest_document` raises before touching the store at
+   all if the sidecar is missing/invalid. `ingest_paths`/`ingest_directory`
+   go further: every sidecar in the batch is validated *first*, in order,
+   before anything is chunked, embedded, or added to the store — so a
+   directory ingest that fails leaves the store exactly as it was, not
+   partially populated with whichever documents happened to sort before the
+   bad one. Consequence for step 7: `ingest_directory(DATA_ROOT, ...)` on
+   the actual demo corpus **raises**, because `pump_p102_notes.txt` has no
+   sidecar by design (`data/README.md`). Step 7's startup routine must
+   either call `ingest_paths` with an explicit, known-good list, or catch
+   `MissingSidecarError`/`InvalidSidecarError` and decide what to do next —
+   this module will never silently ingest "everything except the bad ones".
+
+4. **One `MIN_SCORE` relevance floor (default `0.5`, `CITADEL_RAG_MIN_SCORE`),
+   and it is not a security control.** The ACL/classification filter above
+   it is unconditional regardless of this value — a finance-ACL chunk is
+   excluded from a maintenance-department search even if it would have
+   scored 0.99. `MIN_SCORE` only trims low-relevance-but-permitted results,
+   and empirically (against this corpus and `nomic-embed-text`) it is also
+   what makes the mandatory denial-path demo come back with *zero* rows for
+   `query="Q3 finance report"` rather than a handful of weakly-related,
+   technically-permitted maintenance chunks — see "Ambiguities resolved"
+   below.
+
+5. **`page` is an honest ordinal, not a lie about pagination.** The corpus is
+   plain `.txt` (data/README.md), so `page` is the 1-based position of the
+   chunk within its document in reading order — `app/rag/chunking.py`'s
+   docstring says this explicitly. A future `.pdf` ingester would replace
+   `chunk_text` and start producing real page numbers without changing
+   anything downstream (`Chunk.page` is already just an `int`).
+
+6. **`evidence_id` is minted fresh per search result, not stored per chunk at
+   ingestion time.** Design doc section 3 shows `Evidence` as "owned by Data
+   Plane, returned through Tool Gateway" — it is the retrieval result
+   object, not the storage row (`app.rag.store.Chunk` is the storage row,
+   and is never returned directly). Two different `rag.search` calls citing
+   the same underlying chunk get two different `evidence_id`s; each is still
+   independently valid as a provenance key for whichever artifact cites it
+   within that one task execution (section 6.9: "not a separate graph store
+   — `provenance_id` IS the evidence row's own primary key").
+
+7. **`app/rag/settings.py` reads `os.environ` directly and never imports
+   `app.config`**, per this step's explicit instruction — two independent,
+   never-merged settings modules is the same pattern step 5 used for
+   `execution_service/settings.py` vs `app/execution/settings.py`.
+
+8. **No new third-party dependency.** `app/rag/embeddings.py` uses
+   `urllib.request` (stdlib) against Ollama's `/api/embeddings`; similarity
+   is a plain-Python cosine loop. Nothing was `pip install`ed for this step.
+
+### Phase-2 seams
+
+| Seam | Extend by |
+|---|---|
+| Vector store backend | `VectorStore` is one class with `add`/`chunks`/`save`/`load`; swap its body for a real vector DB (explicitly deferred, design doc section 10) without touching `search.py` or `backend.py` |
+| Persistence across restarts | `VectorStore.save`/`.load` (JSON) already exist and are exercised by nothing automatically; wire a call at process shutdown/startup — `settings.DEFAULT_STORE_PATH` names where |
+| Document formats beyond `.txt` | Replace `chunk_text`'s paragraph splitter with a real `.pdf` parser; `Chunk`/`Evidence`/the sidecar contract are format-agnostic already |
+| Reranking / hybrid BM25 / query expansion | Explicitly not built (non-goal, design doc section 10) — `search()`'s scoring is the one place a reranker would slot in |
+| Relevance tuning | `CITADEL_RAG_TOP_K` / `CITADEL_RAG_MIN_SCORE` / `CITADEL_RAG_MIN_CHUNK_CHARS`, all env-driven; no code change |
+
+### Ambiguities resolved, flagged for the project owner
+
+- **The mission text says a finance-department query from a
+  `maintenance`-department task "must return zero results from your layer".**
+  Read completely literally (zero rows, always, for that query, against the
+  full corpus) this is in tension with cosine similarity on `nomic-embed-text`
+  not being well-calibrated on an absolute scale — a handful of *permitted*
+  maintenance chunks score only marginally lower against a finance-topic
+  query than the finance chunks themselves do (measured: the best-scoring
+  permitted chunk hits 0.4926 against `"Q3 finance report"`, only ~0.03 below
+  the ACL-excluded finance chunks' own best score of 0.4926-0.6211). The ACL
+  filter alone (unconditional, see decision 2) already guarantees the
+  security property the demo cares about — **zero finance-ACL rows, ever** —
+  regardless of any score. `MIN_SCORE=0.5` (decision 4) was then chosen, and
+  empirically verified against this exact corpus and query, so the literal
+  reading holds too: the demo and `test_out_of_scope_document_is_filtered_before_reaching_the_agent`
+  both observe a genuinely empty result list, not just an absence of the
+  finance document. Flagged because `MIN_SCORE`'s value is an empirical
+  tuning choice against one embedding model and one corpus, not a derived
+  constant — a different embedding model would need it re-measured.
+- **What counts as "a document" for the mandatory-sidecar rule.** Section
+  6.9's own example is a `.pdf`; the demo corpus is `.txt`
+  (data/README.md's own note). `app/rag/ingest.py::discover_documents`
+  treats every file under a directory as a document requiring a sidecar
+  *except* files ending in `.meta.json` (the sidecars themselves) and files
+  named exactly `README.md` (the corpus's own documentation, not corpus
+  content) — a deliberate, minimal exception rather than an extension-based
+  allowlist, so a future `.pdf`/`.docx`/etc. document needs no ingestion code
+  change to become "a document that needs a sidecar".
+- **Per-chunk vs. per-document denial reporting.** Section 6.9 asks for "how
+  many were filtered out" without specifying the unit. Implemented both:
+  `filtered_chunk_count` (raw) and `filtered_document_count`/
+  `filtered_documents` (deduplicated by `document_id`, since a document's
+  classification/ACL are uniform across all of its chunks). The demo and the
+  `EVIDENCE_RETRIEVED` payload lead with the document-level view since that
+  is what an auditor reading `/trace` would want to see ("1 document
+  excluded"), not a chunk count that varies with an unrelated chunking
+  decision.
+
+---
 ## Step 7 — `orchestrator` — NOT STARTED
 ## Step 8 — `artifact-pipeline` — NOT STARTED
 ## Step 9 — `cli` — NOT STARTED

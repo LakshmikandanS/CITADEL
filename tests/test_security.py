@@ -378,16 +378,152 @@ def test_disabled_tool_is_denied_even_with_a_valid_capability(db, task, agent):
 # ==========================================================================
 # §9 Security -- owned by execution-service (step 5)
 # ==========================================================================
+#
+# Both lines below are structural checks in the spirit of
+# `test_no_code_path_invokes_a_tool_outside_the_gateway` above: a code path
+# either exists in the source tree or it doesn't, so "no code path exists" is
+# provable by walking the tree rather than by exercising the running system.
+# Each has a negative control proving the detector actually catches a planted
+# violation, the same discipline `test_the_tool_name_detector_is_not_vacuous`
+# applies to the tool-name check.
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+#: design doc §2: the ONE thing every reference to a Docker socket looks
+#: like, whichever transport a platform uses to reach the daemon.
+_DOCKER_SOCKET_MARKERS = (
+    "/var/run/docker.sock",
+    "docker_engine",  # the Windows named-pipe form, \\.\pipe\docker_engine
+)
+
+#: The Postgres/SQLAlchemy driver names, plus `app` itself -- the one
+#: SQLAlchemy engine and Postgres connection this system has lives in
+#: `app/db/engine.py` (design doc §6.11: "the Orchestrator process is the
+#: only holder of the Data Plane's write credential"), so a module that
+#: cannot import `app` at all cannot reach it either.
+_POSTGRES_CODE_PATH_ROOTS = frozenset({"sqlalchemy", "psycopg", "psycopg2", "asyncpg", "app"})
 
 
-@pytest.mark.skip(reason="needs the execution-service (step 5)")
+def _imported_module_roots(source: str) -> set[str]:
+    """Top-level package names named by any `import`/`from ... import` in
+    `source` -- `import sqlalchemy.orm` and `from sqlalchemy import x` both
+    yield `{"sqlalchemy"}`. Relative imports (`from .foo import x`) are
+    excluded deliberately: they stay inside the same package, which is
+    walked in full anyway."""
+    tree = ast.parse(source)
+    roots: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                roots.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module and node.level == 0:
+                roots.add(node.module.split(".")[0])
+    return roots
+
+
+def _non_docstring_string_literals(source: str) -> list[tuple[int, str]]:
+    """Every string-constant literal in `source`, excluding a module's (or a
+    class's/function's) own opening docstring -- matches
+    `_tool_name_literals`'s exemption above, so prose explaining *why* a
+    boundary exists does not itself trip the boundary's own test."""
+    tree = ast.parse(source)
+    docstrings = set()
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            if body and isinstance(body[0], ast.Expr):
+                value = body[0].value
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    docstrings.add(id(value))
+
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        if id(node) in docstrings:
+            continue
+        found.append((node.lineno, node.value))
+    return found
+
+
 def test_execution_zone_has_no_code_path_to_postgres():
-    """No code path exists for the execution zone to reach Postgres directly"""
+    """No code path exists for the execution zone to reach Postgres directly
+
+    Walked as design doc §6.11 states the guarantee: enforced at the network
+    level (no route from the execution zone to Postgres -- proven for the
+    internet case by `tests/test_execution.py`'s §6.13 test, the same Docker
+    network property) *and* at the application level, independent of the
+    network. This is the application-level half: `execution_service/` -- the
+    isolated zone's own code -- imports neither a Postgres driver nor
+    `app` (where the system's one database engine lives), so there is
+    nothing in that process capable of opening a Postgres connection even if
+    a network route existed.
+    """
+    offenders = []
+    for path in (_REPO_ROOT / "execution_service").rglob("*.py"):
+        rel = path.relative_to(_REPO_ROOT).as_posix()
+        hit = _imported_module_roots(path.read_text(encoding="utf-8")) & _POSTGRES_CODE_PATH_ROOTS
+        if hit:
+            offenders.append(f"{rel} imports {sorted(hit)}")
+
+    assert offenders == [], (
+        "the execution zone has a code path to Postgres: " + "; ".join(offenders) +
+        ". execution_service/ must never import a Postgres driver, SQLAlchemy, "
+        "or app/ (where the one SQLAlchemy engine in this system lives)."
+    )
 
 
-@pytest.mark.skip(reason="needs the execution-service (step 5)")
+def test_the_postgres_code_path_detector_is_not_vacuous():
+    """Negative control: prove the detector catches a planted violation
+    rather than passing because it checks nothing."""
+    assert "sqlalchemy" in _imported_module_roots("import sqlalchemy\n")
+    assert "app" in _imported_module_roots("from app.db.engine import SessionLocal\n")
+    assert _imported_module_roots("from . import settings\n") == set()
+    assert _imported_module_roots("import fastapi\nimport docker\n").isdisjoint(
+        _POSTGRES_CODE_PATH_ROOTS
+    )
+
+
 def test_execution_zone_has_no_code_path_to_the_docker_socket():
-    """No code path exists for the execution zone to reach the Docker socket"""
+    """No code path exists for the execution zone to reach the Docker socket
+
+    Read literally per BB-016 (§2, §6.6): "Execution Service is the only
+    Docker-socket holder; agent loop itself never runs untrusted code" --
+    the socket access that must not exist is a path FROM the trusted
+    workflow zone (`app/`, where the agent loop and every trusted component
+    run) TO the Docker socket. `execution_service/` importing `docker` is
+    the intended design, not a violation; the violation this test rules out
+    is the same capability appearing anywhere under `app/`.
+    """
+    offenders = []
+    for path in (_REPO_ROOT / "app").rglob("*.py"):
+        rel = path.relative_to(_REPO_ROOT).as_posix()
+        source = path.read_text(encoding="utf-8")
+
+        if "docker" in _imported_module_roots(source):
+            offenders.append(f"{rel} imports the docker package")
+
+        for lineno, literal in _non_docstring_string_literals(source):
+            for marker in _DOCKER_SOCKET_MARKERS:
+                if marker in literal:
+                    offenders.append(f"{rel}:{lineno} references {marker!r}")
+
+    assert offenders == [], (
+        "the trusted workflow zone has a code path to the Docker socket: " +
+        "; ".join(offenders) + ". Only execution_service/ may import the "
+        "docker package or reference a Docker socket path; app/ talks to it "
+        "over HTTP only, via app/execution/backend.py."
+    )
+
+
+def test_the_docker_socket_detector_is_not_vacuous():
+    """Negative control for the test above."""
+    assert "docker" in _imported_module_roots("import docker\n")
+    assert "docker" in _imported_module_roots("from docker import DockerClient\n")
+    caught = _non_docstring_string_literals('x = "/var/run/docker.sock"\n')
+    assert caught == [(1, "/var/run/docker.sock")]
+    assert _non_docstring_string_literals('"""mentions /var/run/docker.sock"""\n') == []
 
 
 # ==========================================================================

@@ -6,12 +6,28 @@ suite never touches the developer's working database.
 
 from __future__ import annotations
 
+import atexit
 import os
 import tempfile
 from pathlib import Path
 
-_TEST_DB = Path(tempfile.gettempdir()) / "citadel_test.db"
+# One database per pytest *process*, not one per machine. Two concurrent runs
+# (two agents building different steps, or `pytest -p xdist`) otherwise share a
+# single SQLite file and corrupt each other's schema mid-run -- which surfaces
+# as `OperationalError` in whichever suite happens to lose the race, in tests
+# that are individually fine. The pid makes the collision impossible.
+_TEST_DB = Path(tempfile.gettempdir()) / f"citadel_test_{os.getpid()}.db"
 os.environ.setdefault("CITADEL_DATABASE_URL", f"sqlite:///{_TEST_DB.as_posix()}")
+
+
+@atexit.register
+def _remove_test_database() -> None:
+    """Keep the temp dir from filling with one .db per run ever performed."""
+    for path in (_TEST_DB, Path(f"{_TEST_DB}-wal"), Path(f"{_TEST_DB}-shm")):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass  # a stray temp file is not worth failing a test run over
 
 import pytest  # noqa: E402
 
