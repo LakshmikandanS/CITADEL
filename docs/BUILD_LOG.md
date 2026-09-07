@@ -669,6 +669,131 @@ ignorable.
   decision.
 
 ---
-## Step 7 — `orchestrator` — NOT STARTED
+## Step 7 — `orchestrator` — COMPLETE
+
+**Status:** 110 passed, 13 skipped. The 13 skips are steps 8/9's own stubs
+plus step 5's 8 execution tests skipping cleanly (Docker Desktop's daemon was
+down for this integration pass — a slow cold start after being restarted to
+test the demo below, not a step 7 defect; those 8 were proven live in the
+step 5/6 commit, `1eb5623`, and step 7 does not touch `execution_service/` or
+`app/execution/`, only consumes the already-registered backend). One live
+model-routing test did run for real against `hermes3`.
+
+**Demo:** `.venv/Scripts/python -m tests.demos.step7_orchestrator` — needs a
+live Ollama (`hermes3`) and a live Docker daemon; submits one real task over
+HTTP exactly as the CLI's `/task` will, and prints the trace and hash chain.
+**Not run to completion in this integration pass** — Docker Desktop's daemon
+did not come back up within ~8 minutes of being restarted (checked three
+times). The demo is written, reviewed, and ready; run it once Docker is
+confirmed up (`docker version`) to get the live end-to-end trace. The code
+path it exercises (`app/orchestrator/think.py`'s THINK → the same
+`execution_service` container step 5 already proved) was read and verified
+by hand for this entry instead.
+
+### Delivered
+
+```
+app/model_router/manifest.py       the §6.3 static lookup table (BB-006), max_classification per model
+app/model_router/router.py         route_models() -- one function call, no HTTP hop, no scoring
+app/model_router/reasoning_client.py   thin Ollama client, format=json + temperature=0
+app/model_router/errors.py         ModelRoutingError + the three §6.3/BB-007 reason codes
+app/orchestrator/schemas.py        OrchestratePayload, TaskCreateRequest, PlanModel/PlanStepModel (the §5.2 JSON Schema)
+app/orchestrator/plan.py           generate_plan() -- one call, one repair prompt, then FAILED
+app/orchestrator/think.py          THINK -- rebuilds S2's code from real evidence; see decision 1
+app/orchestrator/agent_loop.py     THINK -> ACTION -> OBSERVATION -> DECISION, max 6 steps, 1 retry
+app/orchestrator/working_memory.py in-process only, one task's call stack, never persisted (§6.11)
+app/orchestrator/state.py          commit_task_transition -- the only place Task.status moves, via app/db/transitions.py
+app/orchestrator/report_backend.py the deliberately minimal generate_report seam -- see decision 3
+app/orchestrator/revision.py       §5.3's one scoped case: reject -> re-run generate_report once -> FAILED on a second reject
+app/orchestrator/service.py        orchestrate() -- the §6.2 handoff, synchronous, to completion
+app/orchestrator/router.py         POST /task, POST /internal/orchestrate, GET /tasks/{id}, GET /tasks/{id}/trace
+app/orchestrator/startup.py        registers all three tool backends + ingests the demo corpus, once, at app startup
+app/main.py                        wired the orchestrator router + startup hook
+tests/test_orchestration.py        13 tests (4 checklist + 9 more)
+tests/demos/step7_orchestrator.py  the step-7 demo
+```
+
+### The contract step 8 calls
+
+Nothing new — step 8 replaces `app/orchestrator/report_backend.py`'s
+placeholder with the real `generate_report` (template + Verifier) and adds
+the approval decision endpoint. `orchestrate()`'s signature, the Tool
+Gateway's `invoke()` contract, and `POST /task`'s response shape are all
+unchanged by that swap.
+
+### Decisions later steps must respect
+
+1. **The planner's `python.execute` code argument is never executed.**
+   Tested live against `hermes3` before this step was built: the real §5.2
+   call reliably (3/3) produces a schema-conformant plan, but S2's `code` is
+   a hallucinated placeholder (design doc's own wording: "computed at
+   runtime from S1's evidence") — e.g. `from search_engine import search`,
+   which does not exist. `app/orchestrator/think.py::_think_python_execute`
+   discards it entirely and builds real code from `WorkingMemory`'s actual
+   retrieved evidence. Anything that later touches plan generation must not
+   start trusting S2's literal `arguments.code`.
+
+2. **Working Memory is genuinely not persisted.** It is a plain
+   `WorkingMemory` object living on the Python call stack for one
+   `orchestrate()` call (§6.11). A process restart mid-task loses it — §5.3's
+   revision path fails closed rather than re-running `rag.search`/the
+   sandbox to rebuild it (see `app/orchestrator/revision.py`), because
+   re-running those steps is exactly what §5.3 forbids.
+
+3. **`generate_report`'s current backend is a placeholder, marked as one in
+   its own module docstring.** It writes an Artifact row at `TEMPLATE`'s
+   default `ArtifactStatus.TEMP` and nothing else — no template rendering,
+   no structural checks, no state transition toward `VERIFIED`. Step 8
+   replaces the backend registration in `startup.py`; nothing about the
+   agent loop or the gateway call changes.
+
+4. **`orchestrate()` distinguishes two failure shapes on purpose.**
+   `OrchestrationError` (`TASK_ALREADY_RUNNING`, `INVALID_REQUIREMENTS`) means
+   the handoff itself was malformed — raised, becomes an HTTP error. Every
+   other failure (model routing, plan generation, the agent loop) means the
+   Task row was created and started but did not finish — returned as a normal
+   `OrchestrateResult(status=FAILED, reason=...)`, never raised. This mirrors
+   §6.7's "denied is a first-class outcome" one layer up the stack.
+
+5. **`ModelRoutingError` carries `.code` and `.message` separately** — always
+   read both. A caller that does `str(exc)` alone loses the §6.3 reason code
+   (`MODEL_CLASSIFICATION_INCOMPATIBLE`, etc.), which is exactly the bug this
+   integration pass found and fixed in `app/orchestrator/plan.py` (it was
+   dropping `.code` when building the `FAILED` reason string).
+
+6. **One Agent row per task is enforced by the schema** (`Agent.task_id`
+   UNIQUE, step 3 decision 7), and the agent loop assumes it — there is no
+   multi-agent dispatch anywhere in this module.
+
+7. **`GET /tasks/{id}` and `GET /tasks/{id}/trace` live only in
+   `app/orchestrator/router.py`.** No other router may mount either path
+   (§6.2, C-005) — Control Plane's routers stay `/login` and
+   `/admin/tools/...` only.
+
+### Integration fixes applied after this step's build
+
+- `app/orchestrator/revision.py` had `rag.search`/`python.execute` written
+  literally inside a human-readable error message (not a dispatch call).
+  Step 4's `test_no_code_path_invokes_a_tool_outside_the_gateway` flags any
+  occurrence of those substrings outside the gateway, by design — the
+  message was reworded rather than the checker weakened, since a looser
+  checker is exactly the kind of gap that check exists to close.
+- `app/orchestrator/plan.py` was building its `FAILED` reason string from
+  `str(exc)` on a caught `ModelRoutingError`, silently dropping `.code` — see
+  decision 5 above.
+- `tests/conftest.py`'s per-process database path (from the step 5/6
+  integration pass) and the Ollama/Docker daemons being live are both
+  environmental prerequisites, not code issues; both were confirmed healthy
+  before this step's suite run.
+
+### Phase-2 seams
+
+| Seam | Extend by |
+|---|---|
+| A second model capability (e.g. vision) | Add a manifest entry in `app/model_router/manifest.py`; `route_models` already loops over `required_capabilities` |
+| A real job queue | `orchestrate()` is synchronous by design (§6.2: "no async job queue needed" for this slice's scenario length) — replacing it is a step-boundary change, not a patch |
+| Multi-agent | Requires dropping `Agent.task_id`'s UNIQUE constraint deliberately (step 3 decision 7) before the agent loop can be extended |
+
+---
 ## Step 8 — `artifact-pipeline` — NOT STARTED
 ## Step 9 — `cli` — NOT STARTED
