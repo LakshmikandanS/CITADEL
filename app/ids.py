@@ -23,6 +23,11 @@ ARTIFACT = "ART"
 APPROVAL = "APR"
 PLAN = "P"
 
+#: Not a §3 domain object: §6.6's success envelope carries
+#: `metadata.execution_id` for one Tool Gateway invocation, and that id needs
+#: the same shape as everything else so a trace reads uniformly.
+EXECUTION = "EXEC"
+
 EVENT_PREFIX = "EVT"
 EVENT_PAD = 4  # EVT0001; ordering uses Event.seq, so >9999 events stay correct
 
