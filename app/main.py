@@ -65,3 +65,74 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+# --- Runnable entrypoint (§9, the CLI's server) --------------------------------
+# `.venv/Scripts/python -m app.main` starts the real trusted-zone process on a
+# fixed local port (`app.config.SERVER_HOST`/`SERVER_PORT`) so `cli/` has a real
+# HTTP server to talk to -- going through `create_app()` (not a hand-rolled,
+# smaller app) so the startup hook above still registers the three tool
+# backends and ingests the demo RAG corpus exactly as it does for every other
+# real run of this process.
+#
+# Demo-user seeding lives here, deliberately NOT inside `_startup()` above:
+# every test in this repo that uses `TestClient(create_app())` as a context
+# manager also fires that FastAPI startup event, and several of them create
+# their own "j.rao"/"a.singh"/"s.mehta" rows by hand immediately beforehand
+# (see e.g. tests/demos/step7_orchestrator.py, step8_artifact.py). Seeding
+# there too would either collide with `User.username`'s unique constraint or
+# depend on fixture-ordering luck. Putting it only behind `__main__` means it
+# runs exactly once, for a human actually starting the server, and never
+# during the test suite.
+_DEMO_USERS = (
+    # username,   password,        roles,                    clearance,      department
+    ("j.rao", "engineer-pw", ("engineer",), "CONFIDENTIAL", "maintenance"),
+    ("a.singh", "approver-pw", ("approver",), "CONFIDENTIAL", "maintenance"),
+    ("s.mehta", "admin-pw", ("admin",), "CONFIDENTIAL", "security"),
+)
+
+
+def _seed_demo_users() -> None:
+    """Idempotently create the three §1.1/§1.2/§1.3 personas so a human can
+    `citadel login` immediately after starting the server. Skips any username
+    that already exists (a restart against the same `var/citadel.db` must not
+    error, and must not touch a user someone has since modified)."""
+    from app.db import init_db
+    from app.db.engine import SessionLocal
+    from app.identity import create_user, get_user_by_username
+
+    init_db.create_all()
+    with SessionLocal() as session:
+        created = []
+        for username, password, roles, clearance, department in _DEMO_USERS:
+            if get_user_by_username(session, username) is not None:
+                continue
+            create_user(
+                session,
+                username=username,
+                password=password,
+                roles=list(roles),
+                clearance=clearance,
+                department=department,
+            )
+            created.append(username)
+        session.commit()
+    if created:
+        print(f"Seeded demo users: {', '.join(created)}")
+
+
+def run_server() -> None:  # pragma: no cover -- exercised by running the app for real
+    """Seed the demo personas, then serve `app` for real. Called by this
+    module's own `__main__` guard and by `citadel serve` (`cli/main.py`) --
+    the one place both entrypoints share, so there are not two slightly
+    different ways to start the same process."""
+    import uvicorn
+
+    from app import config
+
+    _seed_demo_users()
+    uvicorn.run(app, host=config.SERVER_HOST, port=config.SERVER_PORT)
+
+
+if __name__ == "__main__":  # pragma: no cover -- exercised by running the app for real
+    run_server()

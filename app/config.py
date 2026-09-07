@@ -68,3 +68,12 @@ SESSION_TTL_HOURS: int = int(os.environ.get("CITADEL_SESSION_TTL_HOURS", "8"))
 #: §6.5: "short TTL (5 minutes)". This is the ONLY expiry mechanism for a
 #: capability -- there is no revocation list in this slice (BB-020).
 CAPABILITY_TTL_SECONDS: int = int(os.environ.get("CITADEL_CAPABILITY_TTL_SECONDS", "300"))
+
+
+# --- Server entrypoint (§9, step 9's own runnable process) ---------------------
+# `python -m app.main` binds a real uvicorn server here so the CLI (`cli/`) has
+# something to talk to over HTTP -- the trusted zone's one process (§2), run
+# for real rather than through `TestClient`. Not used by the test suite, which
+# talks to `create_app()` in-process.
+SERVER_HOST: str = os.environ.get("CITADEL_SERVER_HOST", "127.0.0.1")
+SERVER_PORT: int = int(os.environ.get("CITADEL_SERVER_PORT", "8420"))

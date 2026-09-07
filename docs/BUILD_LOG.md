@@ -946,4 +946,220 @@ unchanged; the CLI's `/approve <approval_id>` maps directly onto
 
 ---
 
-## Step 9 — `cli` — NOT STARTED
+## Step 9 — `cli` — COMPLETE
+
+**Status:** 125 passed, 9 skipped (up from step 8's 116 passed / 10 skipped —
+`tests/test_cli.py` adds 8 tests, one of which (a live, real-socket,
+real-Ollama-and-Docker run) skips cleanly when Docker is unreachable; the two
+`tests/test_audit.py` §9 Audit stubs that were blocked on this step now have
+real implementations instead of `pytest.mark.skip`, +2 passed/−2 skipped
+there). Docker Desktop's daemon was down for this integration pass too
+(`docker version` fails the same way steps 7/8's own passes recorded —
+client reachable, `npipe:////./pipe/dockerDesktopLinuxEngine` refuses the
+connection); Ollama *was* reachable (`hermes3`, `nomic-embed-text` both
+present). Every CLI test that does not itself need a live Docker/Ollama pair
+runs against fake `rag.search`/`python.execute` backends and a stubbed
+planner, the same discipline `artifact-pipeline` (step 8) used for its own
+suite — this is the majority of `tests/test_cli.py` and both of the
+newly-real `test_audit.py` tests.
+
+**Demo:** `.venv/Scripts/python -m app.main` (or `.venv/Scripts/python -m cli
+serve`) starts the real trusted-zone server on `127.0.0.1:8420`, seeding the
+three §1 personas (`j.rao`/engineer, `a.singh`/approver, `s.mehta`/admin;
+passwords `engineer-pw`/`approver-pw`/`admin-pw`). Then, from a second shell:
+`.venv/Scripts/python -m cli login`, `... task "..." --classification
+CONFIDENTIAL`, `... status <task_id>`, `... approve <task_id>`, `... trace
+<task_id>`, `... admin disable-tool <tool_name>` — the exact §1 vocabulary,
+typed by a human.
+
+### Delivered
+
+```
+cli/__init__.py       package docstring, the full command list
+cli/config.py         CITADEL_CLI_BASE_URL / _TIMEOUT_SECONDS / _HOME, os.environ-only (§6's split-settings convention)
+cli/session.py         ~/.citadel/session.json -- the on-disk session cache, load/save/clear
+cli/client.py           CitadelClient -- the one HTTP chokepoint; wraps all six endpoints; resolve_approval_id()
+cli/main.py             Typer app: login, task, status, trace, approve, reject, admin disable-tool, serve
+cli/__main__.py          `python -m cli <command>`
+tests/test_cli.py        8 tests: login-caches-across-invocations, bad-password rejection, admin role-gating
+                          (admin/non-admin), trace rendering, a full fake-backend task->status->approve->trace
+                          run, a reject->revision run, and one live, real-socket, skip-if-unreachable run
+```
+
+Plus two small, deliberately narrow edits to files this step does not own
+outright but had to touch to make the CLI runnable at all:
+
+```
+app/config.py   + SERVER_HOST / SERVER_PORT (127.0.0.1:8420 default) -- the one thing `python -m app.main` needs
+app/main.py     + _seed_demo_users() / run_server() / `if __name__ == "__main__"` -- see decision 2 below
+tests/test_audit.py   the two §9 Audit stubs that were `pytest.mark.skip`-blocked on this step now have real
+                       bodies (decision 7 below) -- everything else in that file is unchanged
+```
+
+### Decisions
+
+1. **Typer was not actually an installed dependency** despite the brief's
+   own wording ("already a dependency — used nowhere yet"); `pip install
+   typer` pulled in `rich`, `shellingham`, `markdown-it-py`, `mdurl` (`click`
+   was already present, presumably via `uvicorn`/another dependency). Not
+   added to `docker/app.requirements.txt` — that file is the trusted-zone
+   *server* image's dependency list, and the CLI is a separate client
+   process that is never containerized in this MVP; Typer has no reason to
+   ship inside `docker/app.Dockerfile`'s image.
+
+2. **Demo-user seeding lives behind `app.main.run_server()`/`__main__`, never
+   inside `create_app()`'s FastAPI `@app.on_event("startup")` hook.** Every
+   test in this repo that uses `TestClient(create_app())` as a context
+   manager fires that same startup event, and several already create their
+   own `"j.rao"`/`"a.singh"`/`"s.mehta"` rows by hand immediately beforehand
+   (`tests/demos/step7_orchestrator.py`, `step8_artifact.py`) — seeding
+   there too risks `User.username`'s unique constraint depending on fixture
+   ordering. Seeding only behind an explicit "start the real server" call
+   means it runs exactly once, for a human, and never during the test suite;
+   confirmed live (`Seeded demo users: j.rao, a.singh, s.mehta` printed
+   exactly once on server start).
+
+3. **Session caching: option (a) from the brief** — a dotfile at
+   `~/.citadel/session.json` (overridable via `CITADEL_CLI_HOME`, which is
+   how `tests/test_cli.py` isolates itself from a developer's real home
+   directory), not an in-memory-only/REPL design. A `login` in one shell
+   invocation and a `task` in the next are two different OS processes; only
+   the on-disk cache makes "drivable by a human" true across them, which
+   `tests/test_cli.py::test_login_caches_a_token_a_later_command_can_read`
+   asserts directly (two separate `runner.invoke` calls, nothing shared
+   in-process between them but the file).
+
+4. **`approve`/`reject` are two commands, not one.** The mission brief's own
+   two framings disagreed slightly (`/approve <id> --decision
+   APPROVED|REJECTED` vs. a bare `approve <id>` plus a separate `reject
+   <id>`); both are supported — `approve` defaults `--decision` to
+   `APPROVED` but accepts `REJECTED` too, and `reject` is `approve
+   --decision REJECTED`'s own dedicated alias, since §5.3's revision path
+   needs a way to trigger it from the CLI, not just from a test calling the
+   approval router directly (`tests/test_cli.py::
+   test_cli_reject_triggers_the_scoped_revision` exercises this for real).
+
+5. **`approve <id>`/`reject <id>` accept a task_id OR an approval_id.**
+   There is no `GET /approvals/...` lookup endpoint (§6.2/C-005 name exactly
+   six HTTP surfaces and this step adds none) — `CitadelClient.
+   resolve_approval_id` reads the task's own trace for its most recent
+   `APPROVAL_REQUESTED` event's `approval_id` when given something that
+   looks like a task id (`ids.TASK` prefix), and passes anything else
+   through unchanged. This is a CLI-side convenience, not a new server
+   capability.
+
+6. **The RAG ACL-denial path (§1.2) does not literally emit a `TOOL_DENIED`
+   event in this codebase, and this step did not change that** — it is
+   `data-plane-rag` (step 6)'s own documented decision (see this file's Step
+   6 section, decision 2): the Tool Gateway's policy check for `rag.search`
+   only ever sees `task_resource(task_id)` (the concrete document is not
+   known until the Data Plane looks it up), so it ALLOWs the *operation*;
+   the ACL exclusion happens inside `app.rag.search` itself and is recorded
+   as a normal, successful `EVIDENCE_RETRIEVED` event whose
+   `filtered_documents`/`filtered_document_count` show what was excluded and
+   why. `TOOL_DENIED` is real and does fire in this codebase — for the
+   emergency-control path (§1.3, `tool_disabled`) and for any Tool-Gateway-
+   level policy rule evaluated against a resource the gateway itself was
+   given (a classification-exceeds-task denial, `host.shell`, etc.). Proven
+   live below: §1.3's `TOOL_DENIED` fired twice, for real, against a
+   still-valid capability; §1.2's underlying guarantee (the finance document
+   never reaching the agent) was also proven live, via the real
+   `EVIDENCE_RETRIEVED`/`filtered_documents` shape rather than a
+   `TOOL_DENIED` line. `citadel trace` prints whichever event types the
+   server actually emits, verbatim — it does not assume `TOOL_DENIED` is the
+   only denial-shaped event, and its own legend line says so.
+
+7. **The two `tests/test_audit.py` §9 Audit stubs that were `pytest.mark.
+   skip`-blocked on "steps 7 and 9" now have real bodies**, not left for a
+   separate QA pass — `cli` is exactly the step whose absence was blocking
+   them, and the fixtures/patterns needed already existed in this step's own
+   `tests/test_cli.py`. `test_every_event_type_emitted_during_the_happy_path_run`
+   drives one task through submit → reject (§5.3's one revision) → approve,
+   plus one direct Tool Gateway denial on the same task/agent, and asserts
+   all 16 §6.12 types appear — a single straight-through run cannot touch
+   `TOOL_DENIED`/`APPROVAL_REJECTED` on its own, so the "happy-path run" is
+   read as one coherent demo scenario combining §1's three walkthroughs, the
+   same way the actual demo does. `test_trace_shows_denial_and_emergency_
+   control_events` asserts `GET /tasks/{id}/trace`'s `text` field (what
+   `citadel trace` prints verbatim) renders a policy denial and the
+   emergency-control denial as two ordinary `EVT...`-prefixed lines with no
+   distinct "error" formatting.
+
+### Ambiguities resolved, flagged for the project owner
+
+- **Which of the mission's two command-list framings to follow exactly**
+  where they differed (see decision 4 above) — resolved by supporting both
+  rather than picking one, since neither contradicts the other and the cost
+  of both existing is one small alias command.
+- **Where the server binds** — §6/§9 name no fixed port; chose
+  `127.0.0.1:8420` (`app.config.SERVER_HOST`/`SERVER_PORT`,
+  `CITADEL_SERVER_HOST`/`_PORT` env-overridable) and had `cli/config.py`'s
+  own default base URL match it, documented in both modules' docstrings so
+  the two never drift silently.
+- **§1.2's literal "a TOOL_DENIED event is recorded"** — ruled on per
+  decision 6 above: this is an inherited property of step 6's own design,
+  not something step 9 introduced, changed, or worked around. Flagging it
+  here (rather than only in step 6's own section) because this is the step
+  whose CLI/demo output makes the actual behavior directly observable to a
+  human for the first time, and the discrepancy from the design doc's literal
+  pseudocode should be visible at the point someone is most likely to notice
+  it.
+
+### Live dry-run — how far §11's Definition of Done got run through the CLI
+
+With the real server started via `python -m app.main` (real Ollama, demo
+corpus ingested for real, Docker down):
+
+1. `citadel login` as `j.rao` — real `POST /login`, session cached to
+   `~/.citadel/session.json` (a throwaway `CITADEL_CLI_HOME` for this run).
+2. `citadel task "..." --classification CONFIDENTIAL"` (§1.1's exact text) —
+   real `hermes3` planning call, real `rag.search` against the real corpus
+   (`EVIDENCE_RETRIEVED`, 5 results, one document correctly excluded by ACL
+   — see point 4), then `python.execute` failed with `EXECUTION_ERROR`
+   (`could not reach the Execution Service` — Docker down, so no Execution
+   Service is running; the same environment gap steps 7/8 documented, not a
+   step 9 defect). Task ended `FAILED`. `citadel trace <task_id>` showed the
+   full real chain up through that failure, correctly formatted.
+3. `citadel admin disable-tool python.execute` as `s.mehta` (admin) — real
+   `POST /admin/tools/python.execute/disable`, `disabled: true`.
+4. `citadel login` as `j.rao` again, then the same task text — this time
+   `python.execute`'s step hit the emergency control before ever reaching
+   the (still-down) Execution Service: `reason: step S2 (python.execute)
+   failed after 2 attempt(s): TOOL_DISABLED tool 'python.execute' disabled
+   by administrator`. `citadel trace <task_id>` showed **two** real
+   `TOOL_DENIED` events (one per retry, §5.1's ≤1-retry rule) — §1.3's whole
+   point, proven live: a capability minted *after* the disable, still
+   perfectly well-formed and within its 5-minute TTL, denied purely because
+   policy (checked on every call) changed. No Docker was needed for this
+   proof, since the policy check happens before the Execution Service is
+   ever called.
+5. A third submission, worded to nudge the planner toward the finance
+   document, still planned the fixed §5.2 `rag.search` query — but the real
+   corpus search still surfaced `DOC-FIN-Q3` as a candidate and the real
+   `EVIDENCE_RETRIEVED` event recorded `filtered_document_count: 1`,
+   `filtered_documents: [{"document_id": "DOC-FIN-Q3", "acl": ["finance"],
+   "reason": "acl_disjoint_from_department"}]` — §1.2's underlying guarantee
+   (the finance content never reaches the agent), proven live against the
+   real vector store and real Ollama embeddings, in the shape decision 6
+   above describes (not a `TOOL_DENIED` line).
+
+**Not reached live:** a task completing all the way to `WAITING_FOR_APPROVAL`
+→ `citadel approve` → `RELEASED`/`COMPLETED`, because that needs
+`python.execute` to actually run inside a real sandbox container, which
+needs the Docker daemon this integration pass did not have (identical
+environment gap to steps 7 and 8's own passes). That exact path — submit →
+status → approve → trace ending in `ARTIFACT_RELEASED`/`COMPLETED` — is
+fully proven instead by `tests/test_cli.py::test_cli_happy_path_end_to_end`
+and `tests/test_audit.py::test_every_event_type_emitted_during_the_happy_path_run`,
+both run for real (fake `rag.search`/`python.execute` backends, the real
+`generate_report`/Verifier/approval endpoint, all driven through `cli.main.app`
+exactly as a human's shell commands would), and the reject/revision path is
+proven the same way by `test_cli_reject_triggers_the_scoped_revision`.
+
+### Phase-2 seams
+
+| Seam | Extend by |
+|---|---|
+| A second credential form (SSO, API keys) | `cli/session.py`'s `Session` dataclass and `cli/client.py::login` are the only two places `POST /login`'s shape is assumed; a second `cli.client` method plus a second `cli.main` command would not touch either |
+| A packaged `citadel` console script | `cli/main.py:app` is already a plain Typer app; wiring `[project.scripts] citadel = "cli.main:app"` into a future `pyproject.toml` needs no change here (explicitly out of scope for this MVP) |
+| Async task submission | `cli/client.py::submit_task` is the one place `/task`'s synchronous contract is assumed; a future `/tasks` + polling API would change this one method, not any command |
