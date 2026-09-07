@@ -36,6 +36,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from app.approval.router import router as approval_router
+from app.artifact.router import router as artifact_router
 from app.identity.router import router as identity_router
 from app.orchestrator.router import router as orchestrator_router
 from app.orchestrator.startup import configure as configure_orchestrator
@@ -57,6 +58,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_router)
     app.include_router(orchestrator_router)
     app.include_router(approval_router)
+    app.include_router(artifact_router)
     app.include_router(ui_router)
 
     @app.on_event("startup")
