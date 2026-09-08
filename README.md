@@ -49,31 +49,53 @@ Three things are demonstrable on demand, and they are the point:
   ollama pull nomic-embed-text
   ```
 
-**Install**
+**Run it**
+
+```bash
+.\run.ps1
+```
+
+That is the whole thing. The script creates the virtualenv if missing, installs dependencies,
+checks Docker and Ollama (naming exactly what to do if either is not ready), frees the ports if a
+previous run is still holding them, starts both processes, waits for each to report healthy, and
+opens the console.
+
+On Linux/macOS use `./run.sh` — same behaviour.
+
+| | |
+|---|---|
+| `.\run.ps1 -Check` | verify prerequisites and exit |
+| `.\run.ps1 -Stop` | stop both processes |
+| `.\run.ps1 -StableSecrets` | keep sessions alive across restarts (see below) |
+| `.\run.ps1 -NoBrowser` | don't open a browser |
+
+Logs land in `var/logs/`. Then open **<http://127.0.0.1:8420/ui>**.
+
+<details>
+<summary>Starting it by hand instead</summary>
+
+Two processes, two terminals. The Execution Service is a *separate OS process* on purpose — it is
+the only thing in the system that holds a Docker socket, and that separation is the one real
+security boundary in this slice. Start it first; `python.execute` fails confusingly if nothing is
+listening for it.
 
 ```bash
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+
+.venv\Scripts\python.exe -m execution_service   # terminal 1
+.venv\Scripts\python.exe -m app.main            # terminal 2
 ```
 
-(The per-image lists in `docker/` are deliberately narrower — `app.requirements.txt` must never
+The per-image lists in `docker/` are deliberately narrower — `app.requirements.txt` must never
 gain the `docker` package, because the trusted zone must have no code path to a Docker socket.
-`requirements-dev.txt` is the developer machine where both zones and the tests share one venv.)
+`requirements-dev.txt` is the developer machine, where both zones and the tests share one venv.
+</details>
 
-**Run — two processes, in two terminals**
-
-The Execution Service is a *separate OS process* on purpose. It is the only thing in the system
-that holds a Docker socket, and that separation is the one real security boundary in this slice.
-
-```bash
-.venv\Scripts\python.exe -m execution_service
-```
-
-```bash
-.venv\Scripts\python.exe -m app.main
-```
-
-Then open **<http://127.0.0.1:8420/ui>**.
+> **Signing secrets are per-process by default**, so restarting the server ends your session and
+> the console will ask you to sign in again. That is the correct fail-closed behaviour and no dev
+> secret is committed. For an uninterrupted demo, `.\run.ps1 -StableSecrets` generates them once
+> into `var/secrets.env` (gitignored) and reuses them. Development convenience only.
 
 Demo users are seeded automatically on first start:
 
