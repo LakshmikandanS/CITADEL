@@ -268,6 +268,21 @@ This is the payoff of keeping capability and policy separate. Nothing had to be 
 had to be hunted down, and there is no revocation list in this slice at all — the policy layer
 simply answers differently.
 
+**It is one-way.** There is no re-enable endpoint — §6.8 names exactly one control, and
+`app/policy/router.py` says so in its own docstring. The endpoint ignores any `disabled` field in
+the body and always disables. The flag lives in the server process, so a restart clears it.
+
+The agent's own view of this is a normal failure, not a crash:
+
+```
+status : FAILED
+reason : step S2 (python.execute) failed after 2 attempt(s):
+         TOOL_DISABLED tool 'python.execute' disabled by administrator
+```
+
+Note "2 attempts": the agent loop's one permitted retry ran and was denied again, which is the
+correct behaviour — a retry does not get a second opinion from policy.
+
 ---
 
 ## 10. The audit chain

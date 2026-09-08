@@ -102,15 +102,23 @@ uses, so a document you could not retrieve through an agent is equally unreadabl
 ### The shell client
 
 ```bash
-.venv\Scripts\python.exe -m cli login
+.venv\Scripts\python.exe -m cli login                       # prompts; or -u <user> -p <pass>
 .venv\Scripts\python.exe -m cli task "Identify Pump P-101's recent maintenance history and generate a short summary report." --classification CONFIDENTIAL
 .venv\Scripts\python.exe -m cli status  <task_id>
-.venv\Scripts\python.exe -m cli approve <task_id>
 .venv\Scripts\python.exe -m cli trace   <task_id>
-.venv\Scripts\python.exe -m cli disable-tool python.execute
+.venv\Scripts\python.exe -m cli approve <task_id>           # must be signed in as the approver
+.venv\Scripts\python.exe -m cli reject  <task_id> --comment "..."
+.venv\Scripts\python.exe -m cli admin disable-tool python.execute
 ```
 
-The session token is cached in `~/.citadel/session.json` (override with `CITADEL_CLI_HOME`).
+`login` takes `-u`/`-p` for scripting; without them it prompts. The session token is cached in
+`~/.citadel/session.json` — override the location with `CITADEL_CLI_HOME`, which is handy for
+running several personas side by side.
+
+**`admin disable-tool` is one-way.** §6.8 names exactly one emergency control, so there is no
+`enable-tool` and no re-enable endpoint. The flag lives in the server process; restart it to
+clear. That is deliberate — an emergency stop you can quietly undo is not much of an emergency
+stop.
 
 ---
 
@@ -126,9 +134,17 @@ is filtered inside the data plane and never reaches the agent — visible as `fi
 on the `EVIDENCE_RETRIEVED` event.
 
 **3. Kill-switch.** As `s.mehta`, disable `python.execute`. Run a task as `j.rao`. The capability
-token is still valid and unexpired, and the call is still denied — `TOOL_DENIED`, reason
-*"tool disabled by administrator"*. That is the whole reason capability and policy are kept as
-two separate checks.
+token is still valid and unexpired, and the call is still denied. The task ends:
+
+```
+status : FAILED
+reason : step S2 (python.execute) failed after 2 attempt(s):
+         TOOL_DISABLED tool 'python.execute' disabled by administrator
+```
+
+That is the whole reason capability and policy are kept as two separate checks — nothing had to
+be revoked and no token had to be hunted down; the policy layer simply answers differently.
+Restart the server to clear the flag.
 
 ---
 

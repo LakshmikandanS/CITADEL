@@ -115,7 +115,7 @@
 
     <div class="box"><span class="lbl">Tools</span>
       <ul class="tree" id="toolTree"></ul>
-      <div class="muted" style="margin-top:10px;font-size:11px">A disabled tool is denied on the next call even with a valid capability token.</div>
+      <div class="muted" style="margin-top:10px;font-size:11px">A disabled tool is denied on the next call even with a valid, unexpired capability token.</div>
       <div class="row" style="margin-top:8px">
         <select id="tool" style="flex:1">
           <option>python.execute</option><option>rag.search</option><option>generate_report</option>
@@ -123,7 +123,10 @@
       </div>
       <div class="row" style="margin-top:6px">
         <button id="disableBtn" class="no">disable</button>
-        <button id="enableBtn">re-enable</button>
+      </div>
+      <div class="muted" style="margin-top:8px;font-size:11px">
+        <b>One-way.</b> Section 6.8 names exactly one emergency control, so there is no
+        re-enable endpoint. The flag lives in the server process &mdash; restart it to clear.
       </div>
     </div>
   </div>
@@ -462,14 +465,18 @@ $('#approveBtn').onclick=e=>decide('APPROVED',e.target);
 $('#rejectBtn').onclick=e=>decide('REJECTED',e.target);
 
 /* ---------- kill switch ---------- */
-async function toggle(dis,btn){ clearToast(); busy(btn,true,'applying');
+// Disable-only, on purpose: section 6.8 names exactly one control and the
+// server exposes no re-enable. An earlier version of this panel sent
+// {disabled:false} and reported success -- the endpoint ignored it and
+// disabled anyway, so the UI was reporting something that had not happened.
+async function disableTool(btn){ clearToast(); busy(btn,true,'applying');
   const name=$('#tool').value;
-  try{ await api(`/admin/tools/${name}/disable`,{method:'POST',body:JSON.stringify({disabled:dis})});
-    DISABLED[name]=dis; renderTools();
-    cli(`admin disable-tool ${name} → ${dis?'DISABLED':'re-enabled'}`,'ok');
+  try{ const r=await api(`/admin/tools/${name}/disable`,{method:'POST',body:JSON.stringify({})});
+    DISABLED[name]=r.disabled; renderTools();
+    cli(`admin disable-tool ${name} → DISABLED${r.previously_disabled?' (already was)':''}`,'ok');
+    if(!r.known_tool) cli(`  note: '${name}' is not a registered tool name`,'bad');
   }catch(e){ toast(e.message); cli(e.message,'bad'); } finally{ busy(btn,false);} }
-$('#disableBtn').onclick=e=>toggle(true,e.target);
-$('#enableBtn').onclick=e=>toggle(false,e.target);
+$('#disableBtn').onclick=e=>disableTool(e.target);
 
 /* ---------- in-browser CLI ---------- */
 function cli(line,kind){
@@ -488,8 +495,7 @@ const HELP=`commands
   /open <document_id>     open a document (ACL enforced)
   /approve [task_id]      approve and release
   /reject <comment>       reject, triggers the one bounded revision
-  admin disable-tool <t>  kill-switch a tool
-  admin enable-tool <t>   undo it
+  admin disable-tool <t>  kill-switch a tool (one-way; restart to clear)
   clear                   clear this pane`;
 
 $('#cliIn').addEventListener('keydown',async e=>{
@@ -518,9 +524,11 @@ $('#cliIn').addEventListener('keydown',async e=>{
     else if(cmd==='/approve'){ if(arg) TASK=arg; await decide('APPROVED',$('#approveBtn')); }
     else if(cmd==='/reject'){ $('#cmt').value=arg; await decide('REJECTED',$('#rejectBtn')); }
     else if(cmd==='admin'){
-      const m=raw.match(/^admin\s+(disable|enable)-tool\s+(\S+)/);
+      if(/^admin\s+enable-tool/.test(raw))
+        return cli('there is no enable-tool: section 6.8 names one control. Restart the server to clear the flag.','bad');
+      const m=raw.match(/^admin\s+disable-tool\s+(\S+)/);
       if(!m) return cli('usage: admin disable-tool <tool>','bad');
-      $('#tool').value=m[2]; await toggle(m[1]==='disable',$('#disableBtn'));
+      $('#tool').value=m[1]; await disableTool($('#disableBtn'));
     }
     else cli(`unknown command: ${cmd} — try "help"`,'bad');
   }catch(err){ cli(err.message,'bad'); }
