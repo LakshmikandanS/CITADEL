@@ -1,0 +1,167 @@
+SIH 2026 IDEA SUBMISSION - PS 26117 - TEAM TOKEN SURVIVORS
+Paste each field exactly as it appears between the rules.
+
+========================================================================
+IDEA TITLE  (83 of 100 characters)
+========================================================================
+Citadel: Sovereign On-Premise Agentic AI Workbench for Confidential Industrial Work
+
+========================================================================
+ABSTRACT/SUMMARY  (2,562 of 10,000 characters)
+========================================================================
+Refineries, PSUs, defence manufacturers and government offices hold documents they cannot send to a cloud AI service, so their engineers still draft inspection summaries, approval notes and calculations by hand. Citadel is an agentic AI workbench that runs entirely on the organisation's own hardware, a single workstation with a mid-range GPU, and keeps working with the network cable unplugged.
+
+An engineer describes the work in plain words. A lead agent plans it, helper agents work on parts of it in parallel, and the result is a deliverable, not a chat reply: a Word report or approval note, an Excel calculation, or code that has been run and checked in a sandbox. Every paragraph cites its evidence down to the document, version, page and region. Every deliverable goes through a four-tier verification (structure, schema, citations, and every number traced back to its source), and deliverables that need sign-off are released only by a separate approver, with a SHA-256 hash and a provenance record. People and agents share one browser workbench: an engineer can edit any section by hand or send the report back to the agents with an instruction.
+
+Open-weight models run locally through Ollama and are listed in a registry, not in code: a 4B reasoning model, a 3B coding model, a 2B vision model for scanned pages and an embedding model. A router scores every model for every step (capability, quality, whether it is already loaded, swap cost) and shows why it chose one, so adding a better model later is a registry entry, not a redesign.
+
+Confidentiality is enforced, not assumed. Retrieval filters by classification and department inside the same database query as the vector search, so a document above a user's clearance never reaches the user or the agent. Every tool call passes one policy chokepoint that denies by default and issues a signed, single-use receipt, which the sandbox checks again before it runs any code. Every container either sits on a network with no route out or runs a default-deny egress firewall, and independent monitors plus a deliberate probe show live that no connection leaves the machine. Every decision lands in a hash-chained audit log, and a memory manager lets the workbench learn from earlier tasks under the same access rules.
+
+Citadel is built and demonstrated end to end on an RTX 5060 laptop GPU: model auto-selection with visible reasons, a scanned inspection report turned into a Word deliverable, sandboxed code, vision reading of scanned pages, and zero external connections on a live sovereignty panel.
+
+========================================================================
+IDEA DESCRIPTION  (14,716 of 50,000 characters)
+========================================================================
+THE PROBLEM
+
+Industrial and government organisations work with documents that must not leave their premises: inspection reports, equipment histories, procurement records, policies and drawings. Public AI assistants are off-limits to them, and most AI tools that do run locally are chat interfaces: they answer questions, but they do not produce the document the engineer has to submit, they cannot prove where each statement came from, they give the AI broad access to files and networks, and they tie the organisation to one model. Four gaps follow:
+
+1. No air-gapped AI: confidential work is still done by hand, or risked on public tools.
+2. Unsafe agent authority: an agent with unrestricted access to files, databases and the network is unacceptable in a regulated plant.
+3. Single-model lock-in: models hard-coded into an application go stale as better open-weight models appear.
+4. No provable record: most systems cannot reconstruct who did what, when, with which data, or show that nothing was sent out.
+
+OUR SOLUTION: CITADEL
+
+Citadel is a sovereign agentic AI workbench that runs entirely on the organisation's own hardware. People and AI agents work on the same tasks in one browser workbench, and the output of a task is a verified deliverable - a Word report or approval note, an Excel calculation sheet, or executed code - never just a chat reply. It runs on a single workstation with a mid-range GPU, uses open-weight multimodal models, and keeps working with the network cable unplugged. It does not ask to be trusted: it shows, live, that nothing leaves the machine.
+
+HOW A TASK FLOWS
+
+1. An engineer signs in and describes the work in plain words, for example "report on lathe L-1 covering its condition and the vendor options", and sets the task's classification.
+2. A lead agent plans the work on a local reasoning model. Its plan and assumptions are posted to a shared task state where people can correct them. For larger goals it starts up to three helper agents that work in parallel and share what they find.
+3. The agents recall relevant memories from earlier work, search the organisation's documents and read them page by page. Search filters by the user's clearance and department inside the database query itself, so documents above the user's clearance are counted but never shown to the user or the agent.
+4. Every action - searching, reading, running code, writing files, generating a document - passes one policy chokepoint. It validates the input, applies the policy (default deny), records the decision, and issues a signed receipt bound to that exact input.
+5. Code runs in an isolated sandbox that checks the receipt again, runs each program in a fresh folder with no network, and deletes it afterwards.
+6. The deliverable is generated into an organisational template and verified in four tiers: structure, schema, citations (every citation must resolve to a real document, version, page and region), and grounding (every number must be traceable to the evidence it cites). A failed tier keeps the document a draft; the agents can revise it themselves.
+7. The engineer can edit any section by hand, which creates a new verified version, or send it back to the agents with an instruction. A deliverable that needs sign-off goes to a separate approver - never the person who asked for it - who releases it. Release re-renders the file with the approval block, records its SHA-256 hash and writes its provenance record.
+8. Throughout, the Sovereignty panel shows zero external connections, and every decision is written to a hash-chained audit log.
+
+KEY FEATURES
+
+Deliverables, not chat
+- Word and Excel deliverables from four organisational templates: approval note, inspection summary, report and calculation sheet. Templates are data in a registry, so an organisation's real templates replace them without code changes.
+- Reports follow the request: "cover only the condition and the vendor options" produces exactly those sections.
+- Four-tier verification on every version; any number the verifier cannot trace to the evidence is flagged to the approver, never silently passed.
+- Artifact lifecycle: TEMP, CANDIDATE, VERIFIED, APPROVED, RELEASED, with separation of duties and an immutable provenance record.
+
+A workbench for people and agents together
+- A browser workbench with a resource tree, tabs, a command line (/report, /ask, /revise, /steer, /pause and more), agent cards, a shared task state and notes.
+- People can pause, steer and cancel agents, add notes, and run the same tools through the same policy path; their steps are journalled like the agents'.
+- Every task keeps a journal and can resume from it; step, token and time budgets are checked on every iteration.
+
+Open-weight, multimodal and model-agnostic
+- Models are entries in a registry, never names in code: qwen3:4b for planning and reasoning, qwen2.5-coder:3b for code, granite3.2-vision:2b for scanned pages, and nomic-embed-text for search, all served locally by Ollama on the GPU.
+- A deterministic router scores every model for every step - capability, quality, whether it is already loaded, swap cost - picks one, keeps a fallback chain, and shows the score breakdown in the UI.
+- GPU admission control queues model calls for the card, so several engineers can work in parallel on an 8 GB GPU; CPU admission keeps bulk OCR from starving the interface.
+- Multimodal ingestion: PDF text or OCR, then the vision model reads each scanned page (stamps, signatures and handwritten form fields), and the result is chunked and embedded with page and region evidence.
+- The same code carries a second profile for a university DGX-H200 cluster served by vLLM, for evaluation with public data only, so moving to larger models is a configuration change, not a redesign.
+
+Access control that filters before ranking
+- A classification lattice (PUBLIC, INTERNAL, CONFIDENTIAL); an unknown marking is never comparable and is therefore denied.
+- Every document and every memory carries a classification and a department ACL, checked inside the same SQL statement as the vector search, so a record the user may not see is never constructed into a result.
+- Hybrid retrieval: vector and keyword search fused, then reranked on the CPU. Every passage carries an evidence id pointing to its document, version, page and region.
+- Documents keep their versions; the agents can compare two issues of a policy and cite both the old and the new wording.
+
+One chokepoint for every action
+- Fifteen tools, loaded from a manifest: docs.search, docs.read, docs.diff, fs.read, fs.write, code.run, sheet.read, sheet.write, vision.extract, doc.generate, calc.evaluate, web.search (an offline reference library), memory.recall, workbench.inspect and state.note.
+- Policy is data: an ordered rule table where the first match wins and anything unmatched is denied. Rules cover clearance, department ACL, classification ceilings, roles and receipts.
+- Every allowed call receives an Ed25519-signed, single-use receipt bound to a digest of its exact input; the executing boundary verifies it before acting. Every denial is recorded and the tool never runs.
+
+Isolated code execution
+- A hardened sandbox service on an internal network with no route out: a non-root user, a read-only root filesystem, no Linux capabilities, process, memory and CPU limits, and no host mounts.
+- It verifies each receipt, runs every program as its own process in a fresh folder, enforces a timeout, and deletes the folder afterwards. No Citadel process holds the Docker socket.
+
+Zero egress, enforced and independently watched
+- A default-deny nftables egress ruleset inside each application container allows only the internal networks and the local model runtime. The sandbox and database networks have no route out at all, and the sandbox cannot open connections inward.
+- Two independent monitors - an audit hook inside each process and a scanner that asks the operating system which connections exist - record every outbound attempt, attributed to the task and agent.
+- A deliberate probe tries to reach the internet on demand, and the Sovereignty panel shows every attempt blocked and zero external connections.
+- The web interface embeds no external URL: no CDN, font host or icon service. A structural test enforces it.
+
+Tamper-evident audit and observability
+- An append-only, hash-chained (SHA-256) audit log with one writer and 46 registered event types: sign-ins, policy decisions, receipts, routing choices, retrievals and denials, edits, approvals, releases and egress events. The chain can be verified from the UI.
+- Panels for traces, model evaluation (grounding rate, verification by tier), metrics, container health, database health, security and policy auditing.
+
+Memory that learns under the same rules
+- A memory manager based on our Monarch design keeps episodic memory (what happened) and semantic memory (what is true). A model proposes one of six operations - create, update, merge, contradict, ignore or archive - and a deterministic executor applies it.
+- Memories are access-controlled exactly like documents and are only compared within the same classification and ACL. They guide where to look; facts are always cited from documents.
+
+ARCHITECTURE
+
+- Browser workbench, served by the API: hand-written HTML, CSS and JavaScript with no external assets.
+- API service: sign-in with Ed25519 session tokens, where identity always comes from the verified token and never from a request body; tasks, reports, approvals and live updates over Server-Sent Events.
+- Worker service: the planner, lead and helper agents, the memory manager and document ingestion. Tasks are queued in Postgres and claimed safely by a worker pool.
+- Model gateway: the only code allowed to talk to a model runtime; routing, fallback, admission control and structured output with honest retries.
+- Tool chokepoint and policy engine, feeding the sandbox service, the knowledge store and the deliverables pipeline.
+- PostgreSQL 16 with pgvector on an internal network: documents, chunks and embeddings, memories, tasks and journals, artifacts, traces and the audit chain.
+- Ollama on the host GPU, the only address outside the internal networks a container may reach.
+- Deployment: Docker Compose on one workstation (Docker Desktop with Ollama for Windows), or a dedicated WSL2 Linux distro with Docker Engine. One command, setup, checks and prepares the machine; one command, citadel, starts everything.
+
+TECHNOLOGY STACK
+
+Python 3.12, Starlette and Uvicorn, PostgreSQL 16 with pgvector, Docker Compose, nftables, Ollama (vLLM for the cluster profile), Tesseract OCR, pdfplumber, python-docx, openpyxl, PyJWT and cryptography (Ed25519), psutil, and a hand-written browser interface. Open-weight models: Qwen3 4B, Qwen2.5-Coder 3B, IBM Granite 3.2 Vision 2B and Nomic Embed Text.
+
+HOW CITADEL MEETS THE PROBLEM STATEMENT
+
+- Working local deployment on a single workstation with a mid-range GPU: demonstrated on an NVIDIA RTX 5060 laptop GPU with 8 GB of memory.
+- New open-weight models can be added later without redesigning the system: adding a model is a registry entry, and a larger-model cluster profile uses the same code.
+- Model auto-selection across task types, with the reason visible: planning goes to the reasoning model and code to the coding model, and the score breakdown is shown live.
+- Scanned inspection report to Word approval note: ingestion reads the scan with OCR and the vision model, and the agents draft a cited, verified .docx for approval.
+- A coding task written, executed and verified in the sandbox.
+- Multimodal understanding: the vision model reads scanned pages, including stamps, signatures and handwritten entries, and can re-read a region on request.
+- Zero external calls, shown live through the Sovereignty panel, the probe and the audit log.
+
+FEASIBILITY AND CURRENT STATUS
+
+Citadel is built, not just designed. All five demonstration targets run end to end, and our demo video shows the complete flow on an RTX 5060 laptop: setup, sign-in, a report written by agents from a plain-language request, verification and revision, approval, routing and the sovereignty probe. The repository carries more than 400 automated tests, among them eleven structural checks, each with a negative control, that enforce the core rules in the code itself: no model names outside the registry, one chokepoint for every tool call, only the gateway talks to a model runtime, identity from verified tokens only, classifications compared only through the lattice, and no outbound calls or external URLs. Functional tests check that two engineers asking the same question get different citations and denials. The code passes strict type checking, and a setup guide covers both deployment configurations.
+
+IMPACT AND BENEFITS
+
+- Confidential documents never leave the premises, so organisations that are legally blocked from cloud AI can use it: refineries, PSUs, defence manufacturers and government departments.
+- Engineers get cited, verified drafts in minutes instead of hours of manual writing, with every statement traceable to its source page.
+- Auditors get a complete, tamper-evident record of every model call, tool call, decision and release.
+- No per-token fees, no vendor lock-in and no internet dependency; better open-weight models can be adopted as they appear.
+- Modest hardware: it runs on a single mid-range GPU workstation and scales up to a GPU server without code changes.
+
+WHAT MAKES CITADEL DIFFERENT
+
+- Capability is not authority: agents request actions, and a separate policy decides every single call, with signed receipts that the executing boundary verifies.
+- Filtering before ranking: forbidden documents are never retrieved at all, not filtered out afterwards.
+- Enforcement and independent monitoring together: the firewall blocks, the monitors watch, and a deliberate probe proves it on demand.
+- Verified deliverables with a lifecycle and separation of duties, instead of chat answers.
+- One workbench where people and agents share the same task state, edits and tools.
+
+LIMITATIONS AND ROADMAP
+
+- Sign-in uses seeded demonstration identities without passwords; next is integration with LDAP, Active Directory or SSO.
+- PowerPoint deliverables are planned next to Word and Excel.
+- Sandbox runs share one hardened container; per-run isolation with gVisor is the next step, without giving any process the Docker socket.
+- Model memory and swap costs in the registry are estimates, to be measured on the target hardware.
+- The cluster profile will be benchmarked on the university DGX-H200 with public data only.
+- A two-machine deployment, with a separate GPU server, is prepared as a configuration option.
+
+========================================================================
+TECHNOLOGY BUCKET
+========================================================================
+Smart Automation - the technology bucket (theme) listed for PS 26117 on slide 1 of the deck. Pick exactly the bucket shown on the problem statement's own page.
+
+========================================================================
+YOUTUBE LINK (OPTIONAL)
+========================================================================
+Upload DEMO2_captioned.mp4 (the captioned demo) as Unlisted, not Private: evaluators can open an unlisted link, but not a private video. Open the link in a private window before pasting it.
+Video title: Citadel - Sovereign On-Premise Agentic AI Workbench | SIH 2026 PS 26117 | Token Survivors
+Video description: Citadel is an agentic AI workbench that runs entirely on one workstation with a mid-range GPU and makes zero external connections. In this demo, on an RTX 5060 laptop: one-command setup, a report drafted by local agents from a plain-language request, four-tier verification, approval by a separate approver, visible model routing, and the sovereignty probe showing every outbound attempt blocked. Smart India Hackathon 2026, problem statement 26117, team Token Survivors.
+
+========================================================================
+IDEA TEMPLATE (PDF, UP TO 10 MB)
+========================================================================
+Download the template from the form, put the Token_Survivors deck content into it, use the updated architecture diagram (citadel-architecture.png) on the architecture slide, fill in the Team ID, and export to PDF. Keep it under 10 MB.

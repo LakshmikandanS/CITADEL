@@ -1,0 +1,164 @@
+1
+00:00:10,000 --> 00:00:16,000
+One command, setup, checks this laptop:
+Windows 11 · 15 GB RAM · RTX 5060 (8 GB)
+
+2
+00:00:16,000 --> 00:00:27,000
+Docker Desktop and Ollama are off:
+setup starts both and waits for them
+
+3
+00:00:27,000 --> 00:00:32,000
+4 approved models installed · 0 external
+connections · egress firewall applied
+
+4
+00:00:32,000 --> 00:00:36,000
+citadel starts the stack in Docker:
+API, worker, sandbox and database
+
+5
+00:00:36,500 --> 00:00:41,000
+Sign in as R. Kulkarni,
+process engineering, cleared for INTERNAL
+
+6
+00:00:41,000 --> 00:00:50,000
+Ask for a report in plain words,
+set its classification, press Commit
+
+7
+00:00:50,000 --> 00:00:55,000
+The lead agent takes the task and
+recalls 2 memories from earlier work
+
+8
+00:00:55,000 --> 00:00:59,000
+It plans on qwen3:4b, locally, in 9.4 s,
+and shares its plan and assumptions
+
+9
+00:00:59,000 --> 00:01:02,500
+Every tool call passes the policy check
+and gets a signed receipt
+
+10
+00:01:02,500 --> 00:01:06,500
+2 more documents matched, above her clearance:
+withheld from her and from the agent
+
+11
+00:01:06,500 --> 00:01:12,000
+The Task log follows the same task live
+
+12
+00:01:17,500 --> 00:01:21,500
+Built-in evaluation: calls per model,
+grounding rate, verification by tier
+
+13
+00:01:21,500 --> 00:01:28,000
+0 external connections · 5 attempts stopped
+Policy is data: 8 rules, default deny
+
+14
+00:01:33,000 --> 00:01:41,000
+Trace and container health: every call timed,
+Ollama reachable, every service reporting
+
+15
+00:01:41,500 --> 00:01:48,000
+The five Citadel containers,
+running on this laptop
+
+16
+00:01:49,000 --> 00:02:01,000
+Inference runs on the laptop's own RTX 5060:
+no cloud GPU, no API key
+
+17
+00:02:04,500 --> 00:02:08,000
+Draft v1: every paragraph cites its evidence
+
+18
+00:02:08,000 --> 00:02:12,000
+4-tier check: citation fails (the summary
+has no source), so v1 stays a draft
+
+19
+00:02:12,000 --> 00:02:14,000
+The cited source document, page 1
+
+20
+00:02:14,000 --> 00:02:20,000
+A real Word deliverable: classification marking,
+sources by page and region, revision history
+
+21
+00:02:20,000 --> 00:02:24,000
+Memory: what the workbench learned,
+access-controlled like documents
+
+22
+00:02:24,000 --> 00:02:30,000
+Every deliverable keeps its verification
+record and its SHA-256 hash
+
+23
+00:02:30,000 --> 00:02:34,000
+Routing, live: planning → qwen3:4b,
+code → qwen2.5-coder:3b, scores shown
+
+24
+00:02:34,000 --> 00:02:37,000
+0 external connections ·
+84 model calls, all local
+
+25
+00:02:37,000 --> 00:02:40,000
+The probe tries to get out:
+every attempt blocked and logged
+
+26
+00:02:40,000 --> 00:02:44,500
+Test any decision against the live policy;
+every decision joins a hash-chained audit log
+
+27
+00:02:46,500 --> 00:02:49,500
+Revised by the agents: v3 is VERIFIED
+
+28
+00:02:49,500 --> 00:02:53,000
+Now the approver: V. Rangan,
+quality assurance
+
+29
+00:02:53,000 --> 00:03:00,500
+She checks v3's hash, the flagged number
+and every source, then downloads the Word file
+
+30
+00:03:00,500 --> 00:03:09,000
+Budgets are hard limits: the agent stopped
+at 14 steps, and the verified v3 stands
+
+31
+00:03:09,000 --> 00:03:12,000
+E-101 summary, from a scanned report:
+all 4 tiers pass
+
+32
+00:03:12,000 --> 00:03:14,500
+Still 0 external connections
+
+33
+00:03:26,000 --> 00:03:35,000
+The verified report stays editable:
+every change becomes a new verified version
+
+34
+00:03:35,000 --> 00:03:40,000
+One laptop. Its own GPU.
+Nothing leaves the building.
